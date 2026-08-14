@@ -1,0 +1,220 @@
+--- MRPManager.swift
++++ MRPManager.swift
+@@ -35,6 +35,14 @@
+     private var currentContentIdentifier: String?
+     private var artworkUnavailable = false
+ 
++    /// Supported-command state is reported independently for several MRP
++    /// clients (e.g. Infuse, Music, AirPlay, Netflix). Keep those capabilities
++    /// isolated so a background client's SetState cannot overwrite the controls
++    /// for the client that actually owns the active playback queue.
++    private var commandsByBundleID: [String: Set<MediaCommand>] = [:]
++    private var skipIntervalsByBundleID: [String: [MediaCommand: Double]] = [:]
++    private var currentPlayerBundleID: String?
++
+     public init() {}
+ 
+     // MARK: - Connection lifecycle
+@@ -59,6 +67,10 @@
+                 self?.nowPlaying = nil
+                 self?.supportedCommands = []
+                 self?.preferredSkipIntervals = [:]
++                self?.commandsByBundleID = [:]
++                self?.skipIntervalsByBundleID = [:]
++                self?.currentPlayerBundleID = nil
++                self?.activeAppBundleID = nil
+                 self?.onDisconnect?(error)
+             }
+         }
+@@ -90,6 +102,9 @@
+         nowPlaying = nil
+         supportedCommands = []
+         preferredSkipIntervals = [:]
++        commandsByBundleID = [:]
++        skipIntervalsByBundleID = [:]
++        currentPlayerBundleID = nil
+         activeAppBundleID = nil
+     }
+ 
+@@ -365,50 +380,146 @@
+ 
+     // MARK: - Now playing updates
+ 
++    private func bundleIdentifier(from state: MRP_SetStateMessage) -> String? {
++        guard state.hasPlayerPath,
++              state.playerPath.hasClient,
++              state.playerPath.client.hasBundleIdentifier else {
++            return nil
++        }
++        let bundleID = state.playerPath.client.bundleIdentifier
++        return bundleID.isEmpty ? nil : bundleID
++    }
++
++    private func bundleIdentifier(from update: MRP_UpdateContentItemMessage) -> String? {
++        guard update.hasPlayerPath,
++              update.playerPath.hasClient,
++              update.playerPath.client.hasBundleIdentifier else {
++            return nil
++        }
++        let bundleID = update.playerPath.client.bundleIdentifier
++        return bundleID.isEmpty ? nil : bundleID
++    }
++
++    private func publishCommands(for bundleID: String) {
++        let commands = commandsByBundleID[bundleID] ?? []
++        let intervals = skipIntervalsByBundleID[bundleID] ?? [:]
++        DispatchQueue.main.async {
++            // A newer player may have become active while this publication was
++            // waiting for the main actor. Do not let stale work cross players.
++            guard self.currentPlayerBundleID == bundleID else { return }
++            self.supportedCommands = commands
++            self.preferredSkipIntervals = intervals
++        }
++    }
++
++    private func activatePlayer(bundleID: String) {
++        guard currentPlayerBundleID != bundleID else {
++            DispatchQueue.main.async {
++                self.activeAppBundleID = bundleID
++            }
++            publishCommands(for: bundleID)
++            return
++        }
++
++        currentPlayerBundleID = bundleID
++
++        // Never carry queue metadata or artwork across media clients. If another
++        // app becomes the playing client before it has published a queue, an
++        // empty/degraded Now Playing state is preferable to stale metadata from
++        // the previous app.
++        contentItems = []
++        queueLocation = 0
++        artworkRequestPending = false
++        artworkUnavailable = false
++        currentContentIdentifier = nil
++
++        DispatchQueue.main.async {
++            self.activeAppBundleID = bundleID
++            self.nowPlaying = nil
++        }
++        publishCommands(for: bundleID)
++    }
++
+     private func handleSetState(_ message: MRP_ProtocolMessage) {
+         guard message.hasMRP_setStateMessage else { return }
+         let state = message.MRP_setStateMessage
++        let bundleID = bundleIdentifier(from: state)
+ 
+-        if state.hasPlayerPath && state.playerPath.hasClient && state.playerPath.client.hasBundleIdentifier {
+-            let bundleID = state.playerPath.client.bundleIdentifier
+-            if !bundleID.isEmpty {
+-                DispatchQueue.main.async { self.activeAppBundleID = bundleID }
+-            }
+-        }
++        var parsedCommands: Set<MediaCommand>?
++        var parsedIntervals: [MediaCommand: Double] = [:]
+ 
+         if state.hasSupportedCommands {
+             let infos = state.supportedCommands.supportedCommands
+                 .filter { $0.hasEnabled && $0.enabled && $0.hasCommand }
+             let cmds = infos.compactMap { MediaCommand($0.command) }
+-            var intervals: [MediaCommand: Double] = [:]
++            parsedCommands = Set(cmds)
++
+             for info in infos {
+-                if let cmd = MediaCommand(info.command) {
+-                    if !info.preferredIntervals.isEmpty {
+-                        log.info("MRP cmd \(String(describing: cmd)): preferredIntervals=\(info.preferredIntervals)")
+-                        intervals[cmd] = info.preferredIntervals.first
+-                    }
++                if let cmd = MediaCommand(info.command), !info.preferredIntervals.isEmpty {
++                    log.info("MRP cmd \(String(describing: cmd)): preferredIntervals=\(info.preferredIntervals)")
++                    parsedIntervals[cmd] = info.preferredIntervals.first
+                 }
+             }
+-            if !intervals.isEmpty {
+-                log.info("MRP skip intervals: \(intervals.map { "\($0.key): \($0.value)s" }.joined(separator: ", "))")
++            if !parsedIntervals.isEmpty {
++                log.info("MRP skip intervals: \(parsedIntervals.map { "\($0.key): \($0.value)s" }.joined(separator: ", "))")
++            }
++
++            if let bundleID {
++                commandsByBundleID[bundleID] = parsedCommands ?? []
++                skipIntervalsByBundleID[bundleID] = parsedIntervals
++            }
++        }
++
++        let hasQueueItems = state.hasPlaybackQueue && !state.playbackQueue.contentItems.isEmpty
++        let isPlaying = state.hasPlaybackState && state.playbackState == .playing
++
++        if let bundleID {
++            if isPlaying {
++                activatePlayer(bundleID: bundleID)
++            } else if currentPlayerBundleID == nil && hasQueueItems {
++                activatePlayer(bundleID: bundleID)
+             }
++        }
++
++        // If the current player's command set arrived in this message, publish
++        // it now. Command sets from all other clients remain cached but cannot
++        // replace the active player's transport capabilities.
++        if let bundleID, currentPlayerBundleID == bundleID, state.hasSupportedCommands {
++            publishCommands(for: bundleID)
++        } else if bundleID == nil, currentPlayerBundleID == nil, let parsedCommands {
++            // Compatibility fallback for a SetState lacking a player path.
+             DispatchQueue.main.async {
+-                self.supportedCommands = Set(cmds)
+-                self.preferredSkipIntervals = intervals
+-                if cmds.isEmpty {
+-                    self.nowPlaying = nil
+-                }
++                self.supportedCommands = parsedCommands
++                self.preferredSkipIntervals = parsedIntervals
+             }
+         }
+ 
+         if state.hasPlaybackQueue {
+-            let queue = state.playbackQueue
+-            contentItems = queue.contentItems
+-            queueLocation = queue.hasLocation ? queue.location : 0
+-            updateNowPlayingFromContentItems()
++            let shouldApplyQueue: Bool
++            if let bundleID {
++                shouldApplyQueue = bundleID == currentPlayerBundleID
++            } else {
++                shouldApplyQueue = currentPlayerBundleID == nil
++            }
++
++            if shouldApplyQueue {
++                let queue = state.playbackQueue
++                contentItems = queue.contentItems
++                queueLocation = queue.hasLocation ? queue.location : 0
++                updateNowPlayingFromContentItems()
++            }
+         }
+ 
+         if state.hasPlaybackState {
++            let shouldApplyPlaybackState: Bool
++            if let bundleID {
++                shouldApplyPlaybackState = bundleID == currentPlayerBundleID
++            } else {
++                shouldApplyPlaybackState = currentPlayerBundleID == nil
++            }
++
++            guard shouldApplyPlaybackState else { return }
++
+             let pbState = state.playbackState
+             DispatchQueue.main.async {
+                 if pbState == .stopped {
+@@ -431,6 +542,11 @@
+     private func handleUpdateContentItem(_ message: MRP_ProtocolMessage) {
+         guard message.hasMRP_updateContentItemMessage else { return }
+         let update = message.MRP_updateContentItemMessage
++        let bundleID = bundleIdentifier(from: update)
++
++        if let bundleID, bundleID != currentPlayerBundleID {
++            return
++        }
+ 
+         for item in update.contentItems {
+             if item.hasIdentifier,

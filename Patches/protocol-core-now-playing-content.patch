@@ -1,0 +1,25 @@
+--- MRPManager.swift
++++ MRPManager.swift
+@@ -490,7 +490,21 @@
+         guard item.hasMetadata else { return }
+ 
+         let meta = item.metadata
+-        let hasContent = meta.hasTitle || meta.hasTrackArtistName || meta.hasAlbumName
++        // Textual metadata is optional in normal MRP playback updates. Infuse,
++        // for example, can publish a live queue item with timing/playback data
++        // while temporarily omitting title/artist/album. Do not translate that
++        // valid media state into "Nothing Playing" merely because text is absent.
++        let hasTextContent =
++            meta.hasTitle ||
++            meta.hasTrackArtistName ||
++            meta.hasAlbumName ||
++            meta.hasSubtitle
++        let hasPlaybackContent =
++            meta.hasDuration ||
++            meta.hasElapsedTime ||
++            meta.hasPlaybackRate ||
++            item.hasArtworkData
++        let hasContent = hasTextContent || hasPlaybackContent
+ 
+         guard hasContent else {
+             currentContentIdentifier = nil

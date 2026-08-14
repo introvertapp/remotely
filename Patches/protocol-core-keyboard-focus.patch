@@ -1,0 +1,88 @@
+--- AppleTVManager.swift
++++ AppleTVManager.swift
+@@ -190,6 +190,7 @@
+                     self.connection = nil
+                     self.textInputSessionUUID = nil
+                     self.sentText = ""
++                    self.keyboardFocused = false
+                     self.reconnectCompanion()
+                     return
+                 }
+@@ -436,6 +437,10 @@
+                         return
+                     }
+                     self?.textInputSessionUUID = result.sessionUUID
++                    self?.sentText = result.currentText
++                    DispatchQueue.main.async {
++                        self?.keyboardFocused = true
++                    }
+                     handler(result.sessionUUID)
+                 }
+             }
+@@ -784,13 +789,11 @@
+             }
+             self?.connection?.startKeepAlive()
+             self?.connection?.startTouchSession()
+-            // Start text input listener (like pyatv does on connect)
++            // Start the Companion text-input session immediately. `_tiStarted` is
++            // not emitted when we connect while a tvOS text field is already
++            // focused, so the `_tiStart` response is also a focus snapshot.
+             self?.connection?.startTextInput { [weak self] response in
+-                if let content = response["_c"],
+-                   let tiData = content["_tiD"]?.dataValue,
+-                   let result = try? TextInputSession.decodeStartResponse(tiData) {
+-                    self?.textInputSessionUUID = result.sessionUUID
+-                }
++                self?.updateTextInputFocus(from: response["_c"])
+             }
+             // tvOS 26.5+ silently drops FetchLaunchableApplicationsEvent
+             // unless we register a TV-remote-control session first. On older
+@@ -835,6 +838,7 @@
+                     self.connection = nil
+                     self.textInputSessionUUID = nil
+                     self.sentText = ""
++                    self.keyboardFocused = false
+                     self.reconnectCompanion()
+                     return
+                 }
+@@ -971,6 +975,28 @@
+     }
+ 
+ 
++    /// Update keyboard focus from Companion text-input state. A `_tiD` payload
++    /// means tvOS currently has an editable text field focused; absence of that
++    /// payload means text input is no longer active.
++    private func updateTextInputFocus(from content: OPACK.Value?) {
++        guard let content,
++              let tiData = content["_tiD"]?.dataValue,
++              let result = try? TextInputSession.decodeStartResponse(tiData) else {
++            textInputSessionUUID = nil
++            sentText = ""
++            DispatchQueue.main.async { [weak self] in
++                self?.keyboardFocused = false
++            }
++            return
++        }
++
++        textInputSessionUUID = result.sessionUUID
++        sentText = result.currentText
++        DispatchQueue.main.async { [weak self] in
++            self?.keyboardFocused = true
++        }
++    }
++
+     private func handleOPACKMessage(_ frame: CompanionFrame) {
+         let message: OPACK.Value
+         do {
+@@ -987,6 +1013,11 @@
+         case CompanionMessageType.event.rawValue:
+             let eventName = message["_i"]?.stringValue
+             log.debug("Event: \(eventName ?? "?")")
++            if eventName == "_tiStarted" || eventName == "_tiStopped" {
++                // Companion delivers the event payload in `_c`. Keep this
++                // protocol-driven rather than inferring keyboard need from UI.
++                updateTextInputFocus(from: message["_c"])
++            }
+ 
+         case CompanionMessageType.response.rawValue:
+             let xid = message["_x"]?.intValue ?? -1

@@ -1,0 +1,41 @@
+# OS generated files
+.DS_Store*
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
+# Generated build/dependency output
+Vendor/
+dist/
+
+# Local editor state
+*.xcuserstate
+*.swp
+*~
+
+# IDE
+.idea
+.vscode
+
+# AI agents - local tool state/config; shared guidance belongs in AGENTS.md
+.claude/
+CLAUDE.local.md
+.cursor/
+.windsurf/
+.gemini/
+.codex/
+.aider*
+.cline*
+.roo/
+.opencode/
+.continue/
+
+# Preserve files
+!.gitkeep
