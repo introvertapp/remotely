@@ -11,6 +11,17 @@
 </p>
 
 <p align="center">
+  <img
+    alt="Version"
+    src="https://img.shields.io/badge/dynamic/xml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fintrovertapp%2Fremotely%2Fmain%2FResources%2FInfo.plist&query=%2F%2Fkey%5B.%3D%22CFBundleShortVersionString%22%5D%2Ffollowing-sibling%3A%3Astring%5B1%5D&prefix=v&label=version"
+  >
+  <img
+    alt="Language"
+    src="https://img.shields.io/github/languages/top/introvertapp/remotely"
+  >
+</p>
+
+<p align="center">
   <img src="docs/images/mini-remote.png" alt="MiniRemote" width="560"/>
 </p>
 
