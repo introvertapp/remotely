@@ -10,13 +10,14 @@
 ## Screenshots
 
 <p align="center">
-  <img src="docs/screenshots/remote.png" alt="remotely main remote" width="260"/>
-  <img src="docs/screenshots/apps.png" alt="remotely apps launcher" width="260"/>
-  <img src="docs/screenshots/preferences.png" alt="remotely preferences" width="260"/>
+  <img src="docs/screenshots/remote.png" alt="remote" width="225"/>
+  <img src="docs/screenshots/search.png" alt="remote search" width="225"/>
+  <img src="docs/screenshots/apps.png" alt="apps launcher" width="225"/>
+  <img src="docs/screenshots/preferences.png" alt="preferences" width="225"/>
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/mini-remote.png" alt="remotely MiniRemote" width="760"/>
+  <img src="docs/screenshots/mini-remote.png" alt="MiniRemote" width="560"/>
 </p>
 
 ## Features
