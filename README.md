@@ -1,4 +1,4 @@
-<p align="center">
+<h1 align="center">
   <img alt="logo" src="docs/images/logo.png" width="800"/>
   A native macOS menu-bar remote for Apple TV, with Now Playing controls, app launching, keyboard input, and a compact MiniRemote.
 </p>
@@ -12,7 +12,7 @@
     alt="Language"
     src="https://img.shields.io/github/languages/top/introvertapp/remotely"
   >
-</p>
+</h1>
 
 <p align="center">
   <img src="docs/images/remote.png" alt="remote" width="225"/>
