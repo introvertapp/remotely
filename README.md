@@ -7,6 +7,18 @@
   A native macOS menu-bar remote for Apple TV, with Now Playing controls, app launching, keyboard input, and a compact MiniRemote.
 </p>
 
+## Screenshots
+
+<p align="center">
+  <img src="docs/screenshots/remote.png" alt="remotely main remote" width="260"/>
+  <img src="docs/screenshots/apps.png" alt="remotely apps launcher" width="260"/>
+  <img src="docs/screenshots/preferences.png" alt="remotely preferences" width="260"/>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/mini-remote.png" alt="remotely MiniRemote" width="760"/>
+</p>
+
 ## Features
 
 - Full Apple TV remote with clickpad, navigation, playback, volume, and power controls
