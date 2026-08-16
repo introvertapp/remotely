@@ -4,14 +4,14 @@
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/remote.png" alt="remote" width="225"/>
-  <img src="docs/screenshots/search.png" alt="remote search" width="225"/>
-  <img src="docs/screenshots/apps.png" alt="apps launcher" width="225"/>
-  <img src="docs/screenshots/preferences.png" alt="preferences" width="225"/>
+  <img src="docs/images/remote.png" alt="remote" width="225"/>
+  <img src="docs/images/search.png" alt="remote search" width="225"/>
+  <img src="docs/images/apps.png" alt="apps launcher" width="225"/>
+  <img src="docs/images/preferences.png" alt="preferences" width="225"/>
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/mini-remote.png" alt="MiniRemote" width="560"/>
+  <img src="docs/images/mini-remote.png" alt="MiniRemote" width="560"/>
 </p>
 
 ## Features
