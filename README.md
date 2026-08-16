@@ -4,13 +4,6 @@
 </p>
 
 <p align="center">
-  <img src="docs/images/remote.png" alt="remote" width="225"/>
-  <img src="docs/images/search.png" alt="remote search" width="225"/>
-  <img src="docs/images/apps.png" alt="apps launcher" width="225"/>
-  <img src="docs/images/preferences.png" alt="preferences" width="225"/>
-</p>
-
-<p align="center">
   <img
     alt="Version"
     src="https://img.shields.io/badge/dynamic/xml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fintrovertapp%2Fremotely%2Fmain%2FResources%2FInfo.plist&query=%2F%2Fkey%5B.%3D%22CFBundleShortVersionString%22%5D%2Ffollowing-sibling%3A%3Astring%5B1%5D&prefix=v&label=version"
@@ -19,6 +12,13 @@
     alt="Language"
     src="https://img.shields.io/github/languages/top/introvertapp/remotely"
   >
+</p>
+
+<p align="center">
+  <img src="docs/images/remote.png" alt="remote" width="225"/>
+  <img src="docs/images/search.png" alt="remote search" width="225"/>
+  <img src="docs/images/apps.png" alt="apps launcher" width="225"/>
+  <img src="docs/images/preferences.png" alt="preferences" width="225"/>
 </p>
 
 <p align="center">
