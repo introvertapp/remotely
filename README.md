@@ -1,5 +1,5 @@
 <p align="center">
-  <img alt="logo" src="docs/images/logo.png" width="800"/><br/>
+  <img alt="logo" src="docs/images/logo.png" width="800"/>
   A native macOS menu-bar remote for Apple TV, with Now Playing controls, app launching, keyboard input, and a compact MiniRemote.
 </p>
 
