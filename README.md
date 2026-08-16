@@ -1,6 +1,5 @@
 <h1 align="center">
   <img alt="logo" src="docs/images/logo.png" width="800"/><br/>
-  remotely
 </h1>
 
 <p align="center">
