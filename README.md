@@ -1,13 +1,11 @@
 <h1 align="center">
-  <img alt="remotely icon" src="Resources/AppIcon.png" width="128"/><br/>
+  <img alt="logo" src="docs/images/logo.png" width="800"/><br/>
   remotely
 </h1>
 
 <p align="center">
   A native macOS menu-bar remote for Apple TV, with Now Playing controls, app launching, keyboard input, and a compact MiniRemote.
 </p>
-
-## Screenshots
 
 <p align="center">
   <img src="docs/screenshots/remote.png" alt="remote" width="225"/>
