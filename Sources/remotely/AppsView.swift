@@ -5,10 +5,23 @@ struct AppsView: View {
     @ObservedObject private var artworkLoader = AppArtworkLoader.shared
     @AppStorage(AppConstants.fetchAppArtworkDefaultsKey) private var fetchAppArtwork = false
 
+    @State private var orderedApps: [RemoteApp] = []
+    @State private var tileFrames: [String: CGRect] = [:]
+    @State private var isEditing = false
+    @State private var draggedAppID: String?
+    @State private var orderDeviceID: String?
+
+    private static let appOrderDefaultsKeyPrefix = "appsOrder."
+    private static let coordinateSpaceName = "AppsCard"
+
     private let columns = [
         GridItem(.flexible(), spacing: 12),
         GridItem(.flexible(), spacing: 12)
     ]
+
+    private var displayedApps: [RemoteApp] {
+        orderedApps.isEmpty ? service.apps : orderedApps
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -36,14 +49,58 @@ struct AppsView: View {
                 } else {
                     ScrollView {
                         LazyVGrid(columns: columns, spacing: 15) {
-                            ForEach(service.apps) { app in
+                            ForEach(displayedApps) { app in
                                 Button {
+                                    guard !isEditing else { return }
                                     service.launchApp(app)
                                 } label: {
                                     appTile(app)
                                 }
                                 .buttonStyle(AppTileButtonStyle())
+                                .modifier(
+                                    AppTileWiggleModifier(
+                                        isEditing: isEditing,
+                                        direction: wiggleDirection(for: app)
+                                    )
+                                )
+                                .scaleEffect(draggedAppID == app.bundleID ? 1.035 : 1)
+                                .zIndex(draggedAppID == app.bundleID ? 1 : 0)
+                                .background {
+                                    GeometryReader { geometry in
+                                        Color.clear.preference(
+                                            key: AppTileFramePreferenceKey.self,
+                                            value: [
+                                                app.bundleID: geometry.frame(
+                                                    in: .named(Self.coordinateSpaceName)
+                                                )
+                                            ]
+                                        )
+                                    }
+                                }
+                                .simultaneousGesture(
+                                    LongPressGesture(minimumDuration: 0.5, maximumDistance: 10)
+                                        .onEnded { _ in
+                                            beginEditing()
+                                        }
+                                )
+                                .simultaneousGesture(
+                                    DragGesture(
+                                        minimumDistance: 4,
+                                        coordinateSpace: .named(Self.coordinateSpaceName)
+                                    )
+                                    .onChanged { value in
+                                        handleDrag(value, app: app)
+                                    }
+                                    .onEnded { _ in
+                                        draggedAppID = nil
+                                    }
+                                )
                                 .accessibilityLabel("Open \(app.name) on Apple TV")
+                                .accessibilityHint(
+                                    isEditing
+                                        ? "Drag to reorder. Click an empty area to save."
+                                        : "Press and hold to reorder apps."
+                                )
                                 .onAppear {
                                     if builtInSymbol(for: app) == nil {
                                         artworkLoader.loadIfNeeded(
@@ -66,8 +123,40 @@ struct AppsView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(AppConstants.remoteBackground)
         .foregroundStyle(.white)
+        .coordinateSpace(name: Self.coordinateSpaceName)
+        .onPreferenceChange(AppTileFramePreferenceKey.self) { frames in
+            tileFrames = frames
+        }
+        .simultaneousGesture(
+            SpatialTapGesture(coordinateSpace: .named(Self.coordinateSpaceName))
+                .onEnded { value in
+                    guard isEditing else { return }
+                    let tappedTile = tileFrames.values.contains { $0.contains(value.location) }
+                    if !tappedTile {
+                        finishEditing(save: true)
+                    }
+                }
+        )
         .onAppear {
+            orderDeviceID = service.remoteDeviceID
+            reconcileApps(service.apps, deviceID: orderDeviceID)
             service.refreshApps()
+        }
+        .onDisappear {
+            if isEditing {
+                finishEditing(save: true)
+            }
+        }
+        .onChange(of: service.apps) { _, apps in
+            reconcileApps(apps, deviceID: orderDeviceID)
+        }
+        .onChange(of: service.remoteDeviceID) { oldValue, newValue in
+            if isEditing {
+                saveOrder(for: oldValue)
+                finishEditing(save: false)
+            }
+            orderDeviceID = newValue
+            reconcileApps(service.apps, deviceID: newValue)
         }
     }
 
@@ -96,6 +185,97 @@ struct AppsView: View {
                 .frame(maxWidth: .infinity, minHeight: 28, alignment: .top)
         }
         .contentShape(Rectangle())
+    }
+
+    private func beginEditing() {
+        guard !isEditing else { return }
+
+        orderDeviceID = service.remoteDeviceID
+        reconcileApps(service.apps, deviceID: orderDeviceID)
+        isEditing = true
+    }
+
+    private func finishEditing(save: Bool) {
+        guard isEditing else { return }
+
+        if save {
+            saveOrder(for: orderDeviceID)
+        }
+
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            draggedAppID = nil
+            isEditing = false
+        }
+    }
+
+    private func handleDrag(_ value: DragGesture.Value, app: RemoteApp) {
+        guard isEditing else { return }
+
+        draggedAppID = app.bundleID
+
+        guard let targetID = tileFrames.first(where: { $0.value.contains(value.location) })?.key,
+              targetID != app.bundleID,
+              let sourceIndex = orderedApps.firstIndex(where: { $0.bundleID == app.bundleID }),
+              let targetIndex = orderedApps.firstIndex(where: { $0.bundleID == targetID }) else {
+            return
+        }
+
+        withAnimation(.easeInOut(duration: 0.14)) {
+            let movedApp = orderedApps.remove(at: sourceIndex)
+            orderedApps.insert(movedApp, at: min(targetIndex, orderedApps.count))
+        }
+    }
+
+    private func reconcileApps(_ apps: [RemoteApp], deviceID: String?) {
+        guard !apps.isEmpty else {
+            orderedApps = []
+            return
+        }
+
+        let preferredOrder: [String]
+        if isEditing, deviceID == orderDeviceID, !orderedApps.isEmpty {
+            preferredOrder = orderedApps.map(\.bundleID)
+        } else {
+            preferredOrder = savedOrder(for: deviceID)
+        }
+
+        let appsByID = Dictionary(uniqueKeysWithValues: apps.map { ($0.bundleID, $0) })
+        var seen = Set<String>()
+        var result: [RemoteApp] = []
+
+        for bundleID in preferredOrder {
+            guard let app = appsByID[bundleID], seen.insert(bundleID).inserted else { continue }
+            result.append(app)
+        }
+
+        for app in apps where seen.insert(app.bundleID).inserted {
+            result.append(app)
+        }
+
+        orderedApps = result
+    }
+
+    private func saveOrder(for deviceID: String?) {
+        guard !orderedApps.isEmpty else { return }
+        UserDefaults.standard.set(
+            orderedApps.map(\.bundleID),
+            forKey: appOrderDefaultsKey(for: deviceID)
+        )
+    }
+
+    private func savedOrder(for deviceID: String?) -> [String] {
+        UserDefaults.standard.stringArray(forKey: appOrderDefaultsKey(for: deviceID)) ?? []
+    }
+
+    private func appOrderDefaultsKey(for deviceID: String?) -> String {
+        let suffix = deviceID?.isEmpty == false ? deviceID! : "default"
+        return Self.appOrderDefaultsKeyPrefix + suffix
+    }
+
+    private func wiggleDirection(for app: RemoteApp) -> Double {
+        app.bundleID.count.isMultiple(of: 2) ? 1 : -1
     }
 
     @ViewBuilder
@@ -181,6 +361,35 @@ struct AppsView: View {
                 .frame(maxWidth: 250)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+
+private struct AppTileWiggleModifier: ViewModifier {
+    let isEditing: Bool
+    let direction: Double
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if isEditing {
+            content
+                .phaseAnimator([false, true]) { view, phase in
+                    view.rotationEffect(.degrees((phase ? 1.05 : -1.05) * direction))
+                } animation: { _ in
+                    .easeInOut(duration: 0.12)
+                }
+        } else {
+            content
+                .rotationEffect(.degrees(0))
+        }
+    }
+}
+
+private struct AppTileFramePreferenceKey: PreferenceKey {
+    static var defaultValue: [String: CGRect] = [:]
+
+    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
     }
 }
 
