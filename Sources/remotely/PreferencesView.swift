@@ -94,6 +94,9 @@ struct PreferencesView: View {
             preferenceToggle("Show Now Playing", isOn: $model.showNowPlaying)
                 .padding(.top, 8)
 
+            preferenceToggle("Auto-skip tv ads and pre-roll sequences", isOn: $model.autoSkipOpeningContent)
+                .padding(.top, 8)
+
             preferenceToggle("Use MiniRemote", isOn: $model.useMiniRemote)
                 .padding(.top, 8)
 

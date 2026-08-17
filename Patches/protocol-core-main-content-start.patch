@@ -1,0 +1,258 @@
+--- MRPManager.swift
++++ MRPManager.swift
+@@ -1,5 +1,6 @@
+ import Foundation
+ import os.log
++import SwiftProtobuf
+ 
+ private let log = CoreLog(category: "MRP")
+ 
+@@ -7,6 +8,7 @@
+ 
+     public var preferredSkipIntervals: [MediaCommand: Double] = [:]
+     public var activeAppBundleID: String?
++    public var autoSkipOpeningContentEnabled = false
+     public var onDisconnect: ((Error?) -> Void)?
+     public var onReady: (() -> Void)?
+     public var onKeyboardFocusChange: ((Bool) -> Void)?
+@@ -16,6 +18,8 @@
+     private var commandsByBundleID: [String: Set<MediaCommand>] = [:]
+     private var skipIntervalsByBundleID: [String: [MediaCommand: Double]] = [:]
+     private var currentPlayerBundleID: String?
++    private var autoSkipOpeningCompletedKeys: Set<String> = []
++    private var autoSkipOpeningPendingKeys: Set<String> = []
+ 
+     public init() {}
+ 
+@@ -24,6 +28,8 @@
+                 self?.commandsByBundleID = [:]
+                 self?.skipIntervalsByBundleID = [:]
+                 self?.currentPlayerBundleID = nil
++                self?.autoSkipOpeningCompletedKeys.removeAll()
++                self?.autoSkipOpeningPendingKeys.removeAll()
+                 self?.activeAppBundleID = nil
+                 self?.onDisconnect?(error)
+ 
+@@ -32,6 +38,8 @@
+         commandsByBundleID = [:]
+         skipIntervalsByBundleID = [:]
+         currentPlayerBundleID = nil
++        autoSkipOpeningCompletedKeys.removeAll()
++        autoSkipOpeningPendingKeys.removeAll()
+         activeAppBundleID = nil
+     }
+ 
+@@ -42,6 +50,7 @@
+                 contentItems = queue.contentItems
+                 queueLocation = queue.hasLocation ? queue.location : 0
+                 updateNowPlayingFromContentItems()
++                maybeAutoSkipOpeningContent()
+             }
+         }
+ 
+@@ -52,6 +61,197 @@
+         }
+     }
+ 
++    // MARK: - Opening-content auto-skip
++
++    /// Apple TV's AVKit player publishes an authoritative main-content start
++    /// time in opaque MediaRemote metadata. When the user opts in, seek to that
++    /// destination once for a newly started playback item. This deliberately
++    /// does not try to classify advertisements, recaps, logos, or other opening
++    /// segments; Apple owns that segmentation and supplies the final boundary.
++    private func maybeAutoSkipOpeningContent() {
++        guard autoSkipOpeningContentEnabled, !contentItems.isEmpty else { return }
++
++        let location = min(Int(queueLocation), contentItems.count - 1)
++        let item = contentItems[location]
++        guard item.hasMetadata else { return }
++
++        let metadata = item.metadata
++        guard let target = mainContentStartTime(from: metadata),
++              target.isFinite,
++              target > 1 else { return }
++
++        let position = metadata.hasElapsedTime ? metadata.elapsedTime : 0
++        guard position.isFinite,
++              position >= 0,
++              position <= 10,
++              position + 0.75 < target else { return }
++
++        let key: String
++        if item.hasIdentifier, !item.identifier.isEmpty {
++            key = item.identifier
++        } else if metadata.hasContentIdentifier, !metadata.contentIdentifier.isEmpty {
++            key = metadata.contentIdentifier
++        } else {
++            // Without a stable playback identity we cannot safely enforce the
++            // one-shot guarantee across repeated metadata publications.
++            return
++        }
++
++        guard !autoSkipOpeningCompletedKeys.contains(key),
++              !autoSkipOpeningPendingKeys.contains(key) else { return }
++
++        autoSkipOpeningPendingKeys.insert(key)
++
++        // Let the new AVKit item settle before sending the seek. Re-check all
++        // safety conditions after the delay so an item switch, preference
++        // change, or user seek cannot be overridden by stale scheduled work.
++        DispatchQueue.main.asyncAfter(deadline: .now() + 0.75) { [weak self] in
++            guard let self else { return }
++            self.autoSkipOpeningPendingKeys.remove(key)
++
++            guard self.autoSkipOpeningContentEnabled,
++                  !self.contentItems.isEmpty else { return }
++
++            let currentLocation = min(Int(self.queueLocation), self.contentItems.count - 1)
++            let currentItem = self.contentItems[currentLocation]
++            guard currentItem.hasMetadata else { return }
++
++            let currentMetadata = currentItem.metadata
++            let currentKey: String
++            if currentItem.hasIdentifier, !currentItem.identifier.isEmpty {
++                currentKey = currentItem.identifier
++            } else if currentMetadata.hasContentIdentifier, !currentMetadata.contentIdentifier.isEmpty {
++                currentKey = currentMetadata.contentIdentifier
++            } else {
++                return
++            }
++
++            guard currentKey == key,
++                  let currentTarget = self.mainContentStartTime(from: currentMetadata),
++                  currentTarget.isFinite,
++                  currentTarget > 1 else { return }
++
++            let currentPosition = currentMetadata.hasElapsedTime ? currentMetadata.elapsedTime : position
++            guard currentPosition.isFinite,
++                  currentPosition >= 0,
++                  currentPosition <= 10,
++                  currentPosition + 0.75 < currentTarget else { return }
++
++            self.autoSkipOpeningCompletedKeys.insert(key)
++            log.info("MRP auto-skip opening content: \(currentPosition)s -> \(currentTarget)s")
++            self.seekToPosition(currentTarget)
++        }
++    }
++
++    /// The pinned protocol schema predates ContentItemMetadata field 67
++    /// (`nowPlayingInfoData`). SwiftProtobuf preserves unknown fields, so
++    /// serialize the message and recover that one length-delimited field from
++    /// the wire representation before decoding its NSKeyedArchiver plist.
++    private func mainContentStartTime(from metadata: MRP_ContentItemMetadata) -> Double? {
++        guard let serialized = try? metadata.serializedData(),
++              let archive = Self.firstLengthDelimitedField(number: 67, in: serialized),
++              archive.starts(with: Data("bplist00".utf8)) else {
++            return nil
++        }
++
++        do {
++            let root = try NSKeyedUnarchiver.unarchiveTopLevelObjectWithData(archive)
++            return Self.findMainContentStartTime(in: root)
++        } catch {
++            return nil
++        }
++    }
++
++    private static func findMainContentStartTime(in value: Any?) -> Double? {
++        guard let value else { return nil }
++
++        if let dictionary = value as? NSDictionary {
++            for (rawKey, rawValue) in dictionary {
++                if let key = rawKey as? String,
++                   key == "avkt/TVRMainContentStartTime" {
++                    if let number = rawValue as? NSNumber {
++                        return number.doubleValue
++                    }
++                    if let text = rawValue as? String, let number = Double(text) {
++                        return number
++                    }
++                }
++
++                if let nested = findMainContentStartTime(in: rawValue) {
++                    return nested
++                }
++            }
++            return nil
++        }
++
++        if let array = value as? NSArray {
++            for item in array {
++                if let nested = findMainContentStartTime(in: item) {
++                    return nested
++                }
++            }
++        }
++
++        return nil
++    }
++
++    /// Minimal protobuf wire reader used only to recover preserved field 67.
++    private static func firstLengthDelimitedField(number wanted: Int, in data: Data) -> Data? {
++        var index = 0
++
++        while index < data.count {
++            guard let tag = readVarint(data, index: &index) else { return nil }
++            let fieldNumber = Int(tag >> 3)
++            let wireType = Int(tag & 0x07)
++
++            switch wireType {
++            case 0:
++                guard readVarint(data, index: &index) != nil else { return nil }
++
++            case 1:
++                guard index + 8 <= data.count else { return nil }
++                index += 8
++
++            case 2:
++                guard let rawLength = readVarint(data, index: &index),
++                      rawLength <= UInt64(Int.max) else { return nil }
++                let length = Int(rawLength)
++                guard index + length <= data.count else { return nil }
++                let payload = data.subdata(in: index..<(index + length))
++                index += length
++                if fieldNumber == wanted {
++                    return payload
++                }
++
++            case 5:
++                guard index + 4 <= data.count else { return nil }
++                index += 4
++
++            default:
++                return nil
++            }
++        }
++
++        return nil
++    }
++
++    private static func readVarint(_ data: Data, index: inout Int) -> UInt64? {
++        var value: UInt64 = 0
++        var shift: UInt64 = 0
++
++        while index < data.count && shift < 64 {
++            let byte = data[index]
++            index += 1
++            value |= UInt64(byte & 0x7f) << shift
++            if byte & 0x80 == 0 {
++                return value
++            }
++            shift += 7
++        }
++
++        return nil
++    }
++
+     // MARK: - Content item updates
+ 
+     private func handleUpdateContentItem(_ message: MRP_ProtocolMessage) {
+@@ -59,6 +259,7 @@
+ // __gap7__
+ 
+         updateNowPlayingFromContentItems()
++        maybeAutoSkipOpeningContent()
+     }
+ 
+     // MARK: - Playback queue request

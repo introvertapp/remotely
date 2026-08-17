@@ -407,6 +407,91 @@ RUNTIME_MANIFEST
   grep -q 'guard shouldApplyPlaybackState else { return }' "$mrp_manager" || { echo "Core inactive-player playback-state guard missing after patch." >&2; exit 1; }
   grep -q 'bundleID != currentPlayerBundleID' "$mrp_manager" || { echo "Core inactive-player content-update guard missing after patch." >&2; exit 1; }
 
+  # Opening-content auto-skip uses the AVKit main-content boundary preserved in
+  # opaque MediaRemote metadata. Apply this only after player isolation so its
+  # queue/update hooks are scoped to the active playback client.
+  local main_content_patch="$ROOT_DIR/Patches/protocol-core-main-content-start.patch"
+  if [[ ! -f "$main_content_patch" ]]; then
+    echo "MRP main-content auto-skip patch is missing; refusing to continue." >&2
+    exit 1
+  fi
+  echo "Applying MRP main-content auto-skip support..."
+  if ! patch -d "$(dirname "$mrp_manager")" -p0 --forward --batch < "$main_content_patch"; then
+    echo "Protocol core changed and the main-content auto-skip patch no longer applies cleanly; refusing to guess." >&2
+    exit 1
+  fi
+  grep -q 'import SwiftProtobuf' "$mrp_manager" || { echo "Core SwiftProtobuf import missing after main-content patch." >&2; exit 1; }
+  grep -q 'public var autoSkipOpeningContentEnabled = false' "$mrp_manager" || { echo "Core auto-skip preference gate missing after patch." >&2; exit 1; }
+  grep -q 'avkt/TVRMainContentStartTime' "$mrp_manager" || { echo "Core AVKit main-content metadata key missing after patch." >&2; exit 1; }
+  grep -q 'position <= 10' "$mrp_manager" || { echo "Core playback-start safety window missing after patch." >&2; exit 1; }
+  grep -q 'autoSkipOpeningCompletedKeys.insert(key)' "$mrp_manager" || { echo "Core one-shot auto-skip guard missing after patch." >&2; exit 1; }
+  grep -q 'self.seekToPosition(currentTarget)' "$mrp_manager" || { echo "Core main-content seek missing after patch." >&2; exit 1; }
+
+  # Normalize structured MediaRemote TV metadata at the protocol boundary so
+  # remotely renders the same title / season-episode / secondary-line model
+  # regardless of which playback app supplied the queue.
+  local media_metadata_patch="$ROOT_DIR/Patches/protocol-core-media-metadata.patch"
+  if [[ ! -f "$media_metadata_patch" ]]; then
+    echo "MRP supplemental media-metadata patch is missing; refusing to continue." >&2
+    exit 1
+  fi
+  echo "Applying MRP supplemental media metadata support..."
+  if ! patch -d "$(dirname "$mrp_manager")" -p0 --forward --batch < "$media_metadata_patch"; then
+    echo "Protocol core changed and the media-metadata patch no longer applies cleanly; refusing to guess." >&2
+    exit 1
+  fi
+  grep -q 'public var nowPlayingSeasonNumber: Int?' "$mrp_manager" || { echo "Core season-number metadata surface missing after patch." >&2; exit 1; }
+  grep -q 'public var nowPlayingEpisodeNumber: Int?' "$mrp_manager" || { echo "Core episode-number metadata surface missing after patch." >&2; exit 1; }
+  grep -q 'public var nowPlayingEpisodeTitle: String?' "$mrp_manager" || { echo "Core episode-title metadata surface missing after patch." >&2; exit 1; }
+  grep -q 'mdta/com.apple.hls.episode-title' "$mrp_manager" || { echo "Core HLS episode-title key missing after patch." >&2; exit 1; }
+  grep -q 'avkt/com.apple.avkit.seasonNumber' "$mrp_manager" || { echo "Core AVKit season-number key missing after patch." >&2; exit 1; }
+  grep -q 'avkt/com.apple.avkit.episodeNumber' "$mrp_manager" || { echo "Core AVKit episode-number key missing after patch." >&2; exit 1; }
+
+  # v1.1.3 follows MRP's explicit now-playing client/player lifecycle so app
+  # switches retire stale sessions immediately. It also protobuf-merges partial
+  # updates only for the same content-item identity, preserving descriptive
+  # episode metadata through Apple TV ad/recap timing updates.
+  local session_lifecycle_patch="$ROOT_DIR/Patches/protocol-core-session-lifecycle.patch"
+  if [[ ! -f "$session_lifecycle_patch" ]]; then
+    echo "MRP session-lifecycle patch is missing; refusing to continue." >&2
+    exit 1
+  fi
+  echo "Applying MRP session lifecycle and partial-metadata correction..."
+  if ! patch -d "$(dirname "$mrp_manager")" -p0 --forward --batch < "$session_lifecycle_patch"; then
+    echo "Protocol core changed and the session-lifecycle patch no longer applies cleanly; refusing to guess." >&2
+    exit 1
+  fi
+  grep -q 'case 46:' "$mrp_manager" || { echo "Core SetNowPlayingClient lifecycle handling missing after patch." >&2; exit 1; }
+  grep -q 'case 47:' "$mrp_manager" || { echo "Core SetNowPlayingPlayer lifecycle handling missing after patch." >&2; exit 1; }
+  grep -q 'case 53:' "$mrp_manager" || { echo "Core RemoveClient lifecycle handling missing after patch." >&2; exit 1; }
+  grep -q 'case 54:' "$mrp_manager" || { echo "Core RemovePlayer lifecycle handling missing after patch." >&2; exit 1; }
+  [[ "$(grep -c 'firstLengthDelimitedField(number: 1, in: payload).flatMap' "$mrp_manager")" -ge 4 ]] || { echo "Core lifecycle wrapper decoding missing after patch." >&2; exit 1; }
+  grep -q 'private var currentPlayerIdentifier: String?' "$mrp_manager" || { echo "Core player identity isolation missing after patch." >&2; exit 1; }
+  grep -q 'private var explicitlySelectedBundleID: String?' "$mrp_manager" || { echo "Core explicit now-playing client selector missing after patch." >&2; exit 1; }
+  grep -q 'explicitlySelectedBundleID == nil || explicitlySelectedBundleID == bundleID' "$mrp_manager" || { echo "Core lifecycle-over-heuristic activation gate missing after patch." >&2; exit 1; }
+  grep -q 'private func clearCurrentPlaybackSnapshot()' "$mrp_manager" || { echo "Core playback-session reset helper missing after patch." >&2; exit 1; }
+  grep -q 'try merged.merge(serializedData: serialized, partial: true)' "$mrp_manager" || { echo "Core same-item partial metadata merge missing after patch." >&2; exit 1; }
+  grep -q 'currentOwnerMatches(bundleID: bundleID, playerID: playerID)' "$mrp_manager" || { echo "Core player-scoped stale-update guard missing after patch." >&2; exit 1; }
+  grep -q 'playbackQueueRequestGeneration' "$mrp_manager" || { echo "Core lifecycle queue-request generation guard missing after patch." >&2; exit 1; }
+
+  # v1.1.4 keeps protocol pushes primary but verifies Now Playing while its UI
+  # is visible. This request is metadata-only so a two-second foreground cadence
+  # cannot turn into repeated artwork downloads.
+  local now_playing_verification_patch="$ROOT_DIR/Patches/protocol-core-now-playing-verification.patch"
+  if [[ ! -f "$now_playing_verification_patch" ]]; then
+    echo "MRP Now Playing verification patch is missing; refusing to continue." >&2
+    exit 1
+  fi
+  echo "Applying lightweight MRP Now Playing verification support..."
+  if ! patch -d "$(dirname "$mrp_manager")" -p0 --forward --batch < "$now_playing_verification_patch"; then
+    echo "Protocol core changed and the Now Playing verification patch no longer applies cleanly; refusing to guess." >&2
+    exit 1
+  fi
+  grep -q 'public func verifyNowPlaying()' "$mrp_manager" || { echo "Core lightweight Now Playing verifier missing after patch." >&2; exit 1; }
+  grep -q 'request.includeMetadata = true' "$mrp_manager" || { echo "Core metadata-only verifier does not request metadata." >&2; exit 1; }
+  grep -q 'request.returnContentItemAssetsInUserCompletion = false' "$mrp_manager" || { echo "Core verifier still requests content-item assets." >&2; exit 1; }
+  grep -q 'nowPlayingVerificationGeneration' "$mrp_manager" || { echo "Core verifier stale-response generation guard missing." >&2; exit 1; }
+
   # Native MRP skip-forward/backward is capability-driven and does not require
   # duration metadata merely to expose the ±10-second transport controls.
   local media_command="$(find "$CORE_DIR/Sources" -type f -path '*/Models/MediaCommand.swift' -print -quit)"
@@ -556,7 +641,7 @@ install_and_launch() {
 
 print_summary() {
   echo
-  echo "remotely v1.0.0 built, signed, installed, and launched successfully."
+  echo "remotely v1.1.4 built, signed, installed, and launched successfully."
   echo "Installed app: /Applications/remotely.app"
   echo "Build log:     $LOG_FILE"
 }

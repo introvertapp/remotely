@@ -1,0 +1,149 @@
+--- MRPManager.swift
++++ MRPManager.swift
+@@ -18,6 +18,15 @@
+     public var preferredSkipIntervals: [MediaCommand: Double] = [:]
+     public var activeAppBundleID: String?
+     public var autoSkipOpeningContentEnabled = false
++
++    /// Supplemental local MediaRemote metadata normalized independently of the
++    /// source app. Apple TV publishes structured TV fields in preserved
++    /// nowPlayingInfoData; other apps can continue using standard title/artist
++    /// fields without any bundle-specific policy in remotely.
++    public var nowPlayingSeriesName: String?
++    public var nowPlayingSeasonNumber: Int?
++    public var nowPlayingEpisodeNumber: Int?
++    public var nowPlayingEpisodeTitle: String?
+     public var onDisconnect: ((Error?) -> Void)?
+     public var onReady: (() -> Void)?
+     public var onKeyboardFocusChange: ((Bool) -> Void)?
+@@ -633,18 +642,109 @@
+     /// serialize the message and recover that one length-delimited field from
+     /// the wire representation before decoding its NSKeyedArchiver plist.
+     private func mainContentStartTime(from metadata: MRP_ContentItemMetadata) -> Double? {
++        guard let root = Self.nowPlayingInfoArchive(from: metadata) else { return nil }
++        return Self.findMainContentStartTime(in: root)
++    }
++
++    private struct SupplementalMediaMetadata {
++        let seriesName: String?
++        let seasonNumber: Int?
++        let episodeNumber: Int?
++        let episodeTitle: String?
++    }
++
++    /// Decode structured MediaRemote fields without tying the result to a
++    /// particular source application. AVKit currently uses these keys for TV
++    /// metadata, while apps that do not publish them simply return nil here.
++    private func supplementalMediaMetadata(from metadata: MRP_ContentItemMetadata) -> SupplementalMediaMetadata {
++        guard let root = Self.nowPlayingInfoArchive(from: metadata) else {
++            return SupplementalMediaMetadata(
++                seriesName: nil,
++                seasonNumber: nil,
++                episodeNumber: nil,
++                episodeTitle: nil
++            )
++        }
++
++        return SupplementalMediaMetadata(
++            seriesName: Self.stringValue(forKeys: [
++                "mdta/com.apple.hls.series-title",
++                "avkt/com.apple.avkit.seriesName"
++            ], in: root),
++            seasonNumber: Self.integerValue(
++                forKey: "avkt/com.apple.avkit.seasonNumber",
++                in: root
++            ),
++            episodeNumber: Self.integerValue(
++                forKey: "avkt/com.apple.avkit.episodeNumber",
++                in: root
++            ),
++            episodeTitle: Self.stringValue(
++                forKeys: [
++                    "mdta/com.apple.hls.episode-title",
++                    "avkt/com.apple.avkit.episodeTitle"
++                ],
++                in: root
++            )
++        )
++    }
++
++    private static func nowPlayingInfoArchive(from metadata: MRP_ContentItemMetadata) -> Any? {
+         guard let serialized = try? metadata.serializedData(),
+-              let archive = Self.firstLengthDelimitedField(number: 67, in: serialized),
++              let archive = firstLengthDelimitedField(number: 67, in: serialized),
+               archive.starts(with: Data("bplist00".utf8)) else {
+             return nil
+         }
+ 
+-        do {
+-            let root = try NSKeyedUnarchiver.unarchiveTopLevelObjectWithData(archive)
+-            return Self.findMainContentStartTime(in: root)
+-        } catch {
++        return try? NSKeyedUnarchiver.unarchiveTopLevelObjectWithData(archive)
++    }
++
++    private static func stringValue(forKeys keys: [String], in value: Any?) -> String? {
++        for key in keys {
++            if let rawValue = findValue(forKey: key, in: value) {
++                if let text = rawValue as? String {
++                    let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
++                    if !cleaned.isEmpty { return cleaned }
++                }
++                if let number = rawValue as? NSNumber {
++                    return number.stringValue
++                }
++            }
++        }
++        return nil
++    }
++
++    private static func integerValue(forKey key: String, in value: Any?) -> Int? {
++        guard let rawValue = findValue(forKey: key, in: value) else { return nil }
++        if let number = rawValue as? NSNumber { return number.intValue }
++        if let text = rawValue as? String { return Int(text) }
++        return nil
++    }
++
++    private static func findValue(forKey wantedKey: String, in value: Any?) -> Any? {
++        guard let value else { return nil }
++
++        if let dictionary = value as? NSDictionary {
++            for (rawKey, rawValue) in dictionary {
++                if let key = rawKey as? String, key == wantedKey {
++                    return rawValue
++                }
++                if let nested = findValue(forKey: wantedKey, in: rawValue) {
++                    return nested
++                }
++            }
+             return nil
+         }
++
++        if let array = value as? NSArray {
++            for item in array {
++                if let nested = findValue(forKey: wantedKey, in: item) {
++                    return nested
++                }
++            }
++        }
++
++        return nil
+     }
+ 
+     private static func findMainContentStartTime(in value: Any?) -> Double? {
+@@ -868,9 +968,15 @@
+         }
+ 
+         let needsArtwork = artworkData == nil && !artworkUnavailable
++        let supplemental = supplementalMediaMetadata(from: meta)
+         log.info("[ART] needsArtwork=\(needsArtwork) artworkUnavailable=\(self.artworkUnavailable) pending=\(self.artworkRequestPending)")
+ 
+         DispatchQueue.main.async {
++            self.nowPlayingSeriesName = supplemental.seriesName
++            self.nowPlayingSeasonNumber = supplemental.seasonNumber
++            self.nowPlayingEpisodeNumber = supplemental.episodeNumber
++            self.nowPlayingEpisodeTitle = supplemental.episodeTitle
++
+             self.nowPlaying = NowPlayingState(
+                 title: meta.hasTitle ? meta.title : nil,
+                 artist: meta.hasTrackArtistName ? meta.trackArtistName : (meta.hasSubtitle ? meta.subtitle : nil),

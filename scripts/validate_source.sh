@@ -38,13 +38,52 @@ grep -q 'static let keyboardPanelHeight: CGFloat = 770' Sources/remotely/AppCons
 grep -q 'static let cornerRadius: CGFloat = 34' Sources/remotely/AppConstants.swift || fail "corner radius changed"
 grep -q 'static let longPressSeconds: Double = 0.65' Sources/remotely/AppConstants.swift || fail "long press threshold changed"
 grep -q '<string>remotely</string>' Resources/Info.plist || fail "remotely bundle name missing"
-grep -q '<string>1.0.0</string>' Resources/Info.plist || fail "v1.0.0 bundle version missing"
+grep -q '<string>1.1.4</string>' Resources/Info.plist || fail "v1.1.4 bundle version missing"
+awk '/<key>CFBundleVersion<\/key>/{getline; if ($0 ~ /<string>6<\/string>/) found=1} END{exit found ? 0 : 1}' Resources/Info.plist || fail "v1.1.4 build number 6 missing"
 grep -q 'PROTOCOL_CORE_REF="052d9a9a0416d577119316ea813aa3b822b408e5"' "$SCRIPT_DIR/build.sh" || fail "pinned protocol-core revision missing"
 grep -q '<key>CFBundleIconFile</key>' Resources/Info.plist || fail "app icon declaration missing"
 grep -q '<key>LSUIElement</key>' Resources/Info.plist || fail "LSUIElement missing"
 grep -q '_companion-link._tcp' Resources/Info.plist || fail "Companion Bonjour declaration missing"
 grep -q 'case apps = 1' Sources/remotely/AppModel.swift || fail "Apps panel mode missing"
 grep -q 'case preferences = 2' Sources/remotely/AppModel.swift || fail "Preferences panel mode missing"
+grep -q 'static let autoSkipOpeningContent = "autoSkipOpeningContent"' Sources/remotely/AppModel.swift || fail "opening-content preference key missing"
+grep -q '@Published var autoSkipOpeningContent: Bool' Sources/remotely/AppModel.swift || fail "opening-content preference state missing"
+grep -q 'Auto-skip tv ads and pre-roll sequences' Sources/remotely/PreferencesView.swift || fail "opening-content preference toggle missing"
+grep -q 'func setAutoSkipOpeningContentEnabled(_ enabled: Bool)' Sources/remotely/AppleTVService.swift || fail "opening-content service bridge missing"
+grep -q 'manager.mrpManager.autoSkipOpeningContentEnabled = enabled' Sources/remotely/AppleTVService.swift || fail "opening-content core preference bridge missing"
+grep -q 'protocol-core-main-content-start.patch' "$SCRIPT_DIR/build.sh" || fail "main-content protocol patch integration missing"
+grep -q 'protocol-core-media-metadata.patch' "$SCRIPT_DIR/build.sh" || fail "supplemental media-metadata protocol patch integration missing"
+[[ -f Patches/protocol-core-media-metadata.patch ]] || fail "supplemental media-metadata patch missing"
+grep -q 'protocol-core-session-lifecycle.patch' "$SCRIPT_DIR/build.sh" || fail "MRP session-lifecycle protocol patch integration missing"
+[[ -f Patches/protocol-core-session-lifecycle.patch ]] || fail "MRP session-lifecycle patch missing"
+grep -q 'case 46:' Patches/protocol-core-session-lifecycle.patch || fail "SetNowPlayingClient lifecycle handling missing from patch"
+grep -q 'case 47:' Patches/protocol-core-session-lifecycle.patch || fail "SetNowPlayingPlayer lifecycle handling missing from patch"
+grep -q 'case 53:' Patches/protocol-core-session-lifecycle.patch || fail "RemoveClient lifecycle handling missing from patch"
+grep -q 'case 54:' Patches/protocol-core-session-lifecycle.patch || fail "RemovePlayer lifecycle handling missing from patch"
+[[ "$(grep -c 'firstLengthDelimitedField(number: 1, in: payload).flatMap' Patches/protocol-core-session-lifecycle.patch)" -ge 4 ]] || fail "lifecycle wrapper payload decoding missing from patch"
+grep -q 'try merged.merge(serializedData: serialized, partial: true)' Patches/protocol-core-session-lifecycle.patch || fail "same-item protobuf metadata merge missing from patch"
+grep -q 'private func clearCurrentPlaybackSnapshot()' Patches/protocol-core-session-lifecycle.patch || fail "playback session reset helper missing from patch"
+grep -q 'currentPlayerIdentifier' Patches/protocol-core-session-lifecycle.patch || fail "player identity tracking missing from patch"
+grep -q 'explicitlySelectedBundleID' Patches/protocol-core-session-lifecycle.patch || fail "explicit now-playing client selector missing from patch"
+grep -q 'lifecycleAllowsActivation' Patches/protocol-core-session-lifecycle.patch || fail "lifecycle-over-heuristic activation gate missing from patch"
+grep -q 'playbackQueueRequestGeneration' Patches/protocol-core-session-lifecycle.patch || fail "queue request generation guard missing from patch"
+grep -q 'protocol-core-now-playing-verification.patch' "$SCRIPT_DIR/build.sh" || fail "MRP visible Now Playing verification patch integration missing"
+[[ -f Patches/protocol-core-now-playing-verification.patch ]] || fail "MRP visible Now Playing verification patch missing"
+grep -q 'public func verifyNowPlaying()' Patches/protocol-core-now-playing-verification.patch || fail "core lightweight Now Playing verification API missing"
+grep -q 'request.includeMetadata = true' Patches/protocol-core-now-playing-verification.patch || fail "core Now Playing verifier metadata request missing"
+grep -q 'request.returnContentItemAssetsInUserCompletion = false' Patches/protocol-core-now-playing-verification.patch || fail "core Now Playing verifier must suppress content-item assets"
+! grep -q 'artworkWidth\|artworkHeight' Patches/protocol-core-now-playing-verification.patch || fail "core periodic Now Playing verifier must not request artwork dimensions"
+grep -q 'nowPlayingVerificationGeneration' Patches/protocol-core-now-playing-verification.patch || fail "core Now Playing verifier stale-response guard missing"
+grep -q 'private var nowPlayingVerificationTimer: Timer?' Sources/remotely/AppleTVService.swift || fail "visible Now Playing verification timer missing"
+grep -Fq 'let shouldRun = (remotePresented || miniRemotePresented) && isConnected' Sources/remotely/AppleTVService.swift || fail "Now Playing verification is not visibility/connection gated"
+grep -q 'withTimeInterval: 2.0, repeats: true' Sources/remotely/AppleTVService.swift || fail "Now Playing verification cadence must remain two seconds"
+grep -q 'manager.mrpManager.verifyNowPlaying()' Sources/remotely/AppleTVService.swift || fail "service does not invoke lightweight Now Playing verification"
+grep -q 'stopNowPlayingVerificationTimer()' Sources/remotely/AppleTVService.swift || fail "Now Playing verifier shutdown path missing"
+grep -q 'nowPlayingSeasonNumber' Sources/remotely/AppleTVService.swift || fail "structured season metadata bridge missing"
+grep -q 'nowPlayingEpisodeNumber' Sources/remotely/AppleTVService.swift || fail "structured episode metadata bridge missing"
+grep -q 'nowPlayingEpisodeTitle' Sources/remotely/AppleTVService.swift || fail "structured episode-title metadata bridge missing"
+grep -q '"artist", "trackArtistName", "subtitle"' Sources/remotely/AppleTVService.swift || fail "generic creator/channel metadata fallback missing"
+grep -q 'formattedSeasonEpisode' Sources/remotely/AppleTVService.swift || fail "structured season/episode formatter missing"
 grep -q 'Text("Preferences")' Sources/remotely/PreferencesView.swift || fail "Preferences heading missing"
 [[ -f Sources/remotely/AppleTVLogoView.swift ]] || fail "shared Apple TV logo view missing"
 grep -q 'Image(systemName: "apple.logo")' Sources/remotely/AppleTVLogoView.swift || fail "Apple TV logo mark missing"
@@ -148,7 +187,7 @@ grep -q 'symbol: "gobackward.10"' Sources/remotely/RemoteView.swift || fail "rew
 grep -q 'symbol: "goforward.10"' Sources/remotely/RemoteView.swift || fail "forward 10 icon missing"
 grep -q 'parseCombinedTVTitle' Sources/remotely/AppleTVService.swift || fail "local TV metadata parsing missing"
 grep -q 'cleanedMediaSegment' Sources/remotely/AppleTVService.swift || fail "robust TV metadata segment parsing missing"
-grep -q 'parsed.episodeTitle ?? cleanSubtitle' Sources/remotely/AppleTVService.swift || fail "TV episode subtitle fallback missing"
+grep -q 'parsed.episodeTitle ?? cleanSecondary' Sources/remotely/AppleTVService.swift || fail "TV secondary-metadata fallback missing"
 grep -q '\[\^A-Za-z0-9\]{0,6}' Sources/remotely/AppleTVService.swift || fail "separator-tolerant season/episode parsing missing"
 grep -q '\.padding(12)' Sources/remotely/RemoteView.swift || fail "MiniRemote-style Now Playing padding missing"
 grep -q 'HStack(alignment: .top, spacing: 12)' Sources/remotely/RemoteView.swift || fail "MiniRemote-style Now Playing artwork gutter missing"
@@ -301,6 +340,34 @@ grep -q 'commandsByBundleID' "$SCRIPT_DIR/build.sh" || fail "build does not veri
 grep -q 'currentPlayerBundleID' "$SCRIPT_DIR/build.sh" || fail "build does not verify selected media client"
 
 echo "MRP player isolation invariants: PASS"
+
+# Explicit lifecycle ownership and same-item metadata retention. Modern tvOS
+# publishes now-playing client/player selection/removal separately from SetState;
+# partial queue updates for an unchanged item must not erase descriptive fields.
+grep -q 'handleSetNowPlayingClient' Patches/protocol-core-session-lifecycle.patch || fail "SetNowPlayingClient handler missing"
+grep -q 'handleSetNowPlayingPlayer' Patches/protocol-core-session-lifecycle.patch || fail "SetNowPlayingPlayer handler missing"
+grep -q 'handleRemoveClient' Patches/protocol-core-session-lifecycle.patch || fail "RemoveClient handler missing"
+grep -q 'handleRemovePlayer' Patches/protocol-core-session-lifecycle.patch || fail "RemovePlayer handler missing"
+grep -q 'mergeWithCachedItemIfSame' Patches/protocol-core-session-lifecycle.patch || fail "same-item queue merge helper missing"
+grep -q 'applyPlaybackQueue' Patches/protocol-core-session-lifecycle.patch || fail "queue merge application missing"
+grep -q 'requestNowPlayingForLifecycleChange' Patches/protocol-core-session-lifecycle.patch || fail "lifecycle refresh request missing"
+grep -q 'explicitlySelectedBundleID == nil || explicitlySelectedBundleID == bundleID' Patches/protocol-core-session-lifecycle.patch || fail "background playing-client reactivation guard missing"
+grep -q 'Applying MRP session lifecycle and partial-metadata correction' "$SCRIPT_DIR/build.sh" || fail "build does not apply session-lifecycle correction"
+
+echo "MRP session lifecycle / metadata retention invariants: PASS"
+
+# v1.1.4 hybrid Now Playing refresh: event-driven MRP remains primary, while
+# the visible full Now Playing surface periodically verifies metadata without
+# requesting artwork. Hidden UI must not poll.
+grep -q 'Applying lightweight MRP Now Playing verification support' "$SCRIPT_DIR/build.sh" || fail "build does not apply visible Now Playing verification support"
+[[ "$(grep -c 'updateNowPlayingVerificationTimer()' Sources/remotely/AppleTVService.swift)" -ge 3 ]] || fail "visible Now Playing verification lifecycle missing"
+grep -Fq '(remotePresented || miniRemotePresented) && isConnected' Sources/remotely/AppleTVService.swift || fail "hidden/disconnected Now Playing verification gate missing"
+grep -q 'manager.mrpManager.verifyNowPlaying()' Sources/remotely/AppleTVService.swift || fail "periodic verification does not reach protocol core"
+if sed -n '/public func verifyNowPlaying()/,/^    }/p' Patches/protocol-core-now-playing-verification.patch | grep -q 'artworkWidth\|artworkHeight'; then
+  fail "periodic Now Playing verification requests artwork dimensions"
+fi
+
+echo "Visible Now Playing verification invariants: PASS"
 
 # Keyboard Search: Companion text-input focus drives a live RTI field
 # above the clickpad. Every edit is mirrored immediately; only tvOS focus-end
@@ -516,7 +583,7 @@ grep -q 'speaker.wave.1.fill' Sources/remotely/MiniRemoteView.swift || fail "Min
 grep -q 'gobackward.10' Sources/remotely/MiniRemoteView.swift || fail "MiniRemote rewind control missing"
 grep -q 'goforward.10' Sources/remotely/MiniRemoteView.swift || fail "MiniRemote forward control missing"
 grep -q 'play.fill' Sources/remotely/MiniRemoteView.swift || fail "MiniRemote play/pause control missing"
-grep -q '<string>1.0.0</string>' Resources/Info.plist || fail "v1.0.0 bundle version missing"
+grep -q '<string>1.1.4</string>' Resources/Info.plist || fail "v1.1.4 bundle version missing"
 echo "configurable presentation / login item / exclusive MiniRemote invariants: PASS"
 # MiniRemote layout: timeline labels must not clip and controls remain
 # vertically separated from the timeline.
@@ -600,5 +667,5 @@ grep -q '.frame(width: AppConstants.panelContentWidth, height: 190)' Sources/rem
 grep -q '.frame(width: 82, height: 166)' Sources/remotely/RemoteView.swift || fail "full Remote Now Playing artwork does not match MiniRemote geometry"
 grep -q 'frame(minWidth: 52, alignment: .trailing)' Sources/remotely/NowPlayingShared.swift || fail "hour-long remaining-time field can regress to wrapping"
 grep -q '.fixedSize(horizontal: true, vertical: false)' Sources/remotely/NowPlayingShared.swift || fail "timeline time labels are not forced to one line"
-grep -q '<string>1.0.0</string>' Resources/Info.plist || fail "v1.0.0 bundle version missing"
+grep -q '<string>1.1.4</string>' Resources/Info.plist || fail "v1.1.4 bundle version missing"
 echo "top-edge dragging / shared Now Playing invariants: PASS"

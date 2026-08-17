@@ -1,0 +1,46 @@
+--- MRPManager.swift
++++ MRPManager.swift
+@@ -3,6 +3,7 @@
+     private var queueLocation: UInt32 = 0
+     private var artworkRequestPending = false
+     private var playbackQueueRequestGeneration: UInt64 = 0
++    private var nowPlayingVerificationGeneration: UInt64 = 0
+     private var currentContentIdentifier: String?
+     private var artworkUnavailable = false
+ 
+@@ -21,6 +22,35 @@
+         sendPlaybackQueueRequest()
+     }
+ 
++    /// Lightweight visible-UI verification. Unlike refreshNowPlaying(), this
++    /// requests metadata only and deliberately omits artwork dimensions/assets.
++    /// The request-generation guards reject responses that were superseded by a
++    /// newer verifier tick or invalidated by a playback-session transition.
++    public func verifyNowPlaying() {
++        guard tunnel != nil else { return }
++
++        var request = MRP_PlaybackQueueRequestMessage()
++        request.location = 0
++        request.length = 1
++        request.includeMetadata = true
++        request.returnContentItemAssetsInUserCompletion = false
++
++        var msg = MRP_ProtocolMessage()
++        msg.type = .playbackQueueRequestMessage
++        msg.MRP_playbackQueueRequestMessage = request
++
++        nowPlayingVerificationGeneration &+= 1
++        let verificationGeneration = nowPlayingVerificationGeneration
++        let sessionGeneration = playbackQueueRequestGeneration
++        sendAndReceive(&msg) { [weak self] response in
++            guard let self,
++                  self.nowPlayingVerificationGeneration == verificationGeneration,
++                  self.playbackQueueRequestGeneration == sessionGeneration,
++                  let response, response.hasMRP_setStateMessage else { return }
++            self.handleSetState(response)
++        }
++    }
++
+     public func seekToPosition(_ position: Double) {
+         var options = MRP_CommandOptions()
+         options.playbackPosition = position

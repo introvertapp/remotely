@@ -63,6 +63,7 @@ final class AppleTVService: ObservableObject {
     private let manager = AppleTVManager()
     private var deviceMap: [String: AppleTVDevice] = [:]
     private var timelineTimer: Timer?
+    private var nowPlayingVerificationTimer: Timer?
     private var remotePresented = false
     private var miniRemotePresented = false
     private var isShuttingDown = false
@@ -461,6 +462,13 @@ final class AppleTVService: ObservableObject {
         scheduleNowPlayingRefresh(after: 0.30)
     }
 
+    /// Enable or disable the protocol core's opt-in opening-content seek.
+    /// The core remains responsible for extracting Apple's AVKit boundary and
+    /// enforcing the one-shot/new-playback safety gates.
+    func setAutoSkipOpeningContentEnabled(_ enabled: Bool) {
+        manager.mrpManager.autoSkipOpeningContentEnabled = enabled
+    }
+
     func seek(to position: TimeInterval) {
         guard position.isFinite else { return }
         manager.mrpManager.seekToPosition(max(0, position))
@@ -505,19 +513,23 @@ final class AppleTVService: ObservableObject {
         }
     }
 
-    /// Tell the service whether the Remote face is actually on screen. Core
-    /// protocol state remains event-driven at all times; only the visible
-    /// playback clock needs a low-frequency local tick between MRP updates.
+    /// Tell the service whether the full Now Playing surface is actually on
+    /// screen. Protocol pushes remain primary, but while any Now Playing surface
+    /// is visible we also issue a
+    /// lightweight metadata-only verification so missed third-party app teardown
+    /// or start events self-correct without keeping background polling alive.
     func setRemotePresentation(isVisible: Bool) {
         guard remotePresented != isVisible else { return }
         remotePresented = isVisible
         updateTimelineTimer()
+        updateNowPlayingVerificationTimer()
     }
 
     func setMiniRemotePresentation(isVisible: Bool) {
         guard miniRemotePresented != isVisible else { return }
         miniRemotePresented = isVisible
         updateTimelineTimer()
+        updateNowPlayingVerificationTimer()
     }
 
     func shutdown() {
@@ -525,6 +537,7 @@ final class AppleTVService: ObservableObject {
         remotePresented = false
         miniRemotePresented = false
         stopTimelineTimer()
+        stopNowPlayingVerificationTimer()
         manager.stopScanning()
         manager.disconnect()
     }
@@ -567,6 +580,10 @@ final class AppleTVService: ObservableObject {
         withObservationTracking {
             _ = manager.mrpManager.nowPlaying
             _ = manager.mrpManager.supportedCommands
+            _ = manager.mrpManager.nowPlayingSeriesName
+            _ = manager.mrpManager.nowPlayingSeasonNumber
+            _ = manager.mrpManager.nowPlayingEpisodeNumber
+            _ = manager.mrpManager.nowPlayingEpisodeTitle
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self, !self.isShuttingDown else { return }
@@ -647,6 +664,7 @@ final class AppleTVService: ObservableObject {
 
         refreshAppsSnapshot()
         updateTimelineTimer()
+        updateNowPlayingVerificationTimer()
 
     }
 
@@ -692,15 +710,30 @@ final class AppleTVService: ObservableObject {
             in: state,
             preferredLabels: ["title", "displayTitle", "name"]
         )
-        let subtitle = Self.reflectedString(
+        // Standard MRP `artist` is also the natural creator/channel line for
+        // non-TV video sources such as YouTube. Keep this source-agnostic: the
+        // renderer consumes one normalized secondary line instead of knowing
+        // which app published it.
+        let secondary = Self.reflectedString(
             in: state,
-            preferredLabels: ["subtitle", "secondaryTitle"]
+            preferredLabels: [
+                "artist", "trackArtistName", "subtitle", "secondaryTitle",
+                "channelName", "creatorName"
+            ]
         )
         let album = Self.reflectedString(
             in: state,
             preferredLabels: ["album", "albumName", "seriesName", "showName"]
         )
-        let metadata = Self.parseMediaMetadata(rawTitle: rawTitle, subtitle: subtitle, album: album)
+        let metadata = Self.parseMediaMetadata(
+            rawTitle: rawTitle,
+            secondary: secondary,
+            album: album,
+            explicitSeriesName: manager.mrpManager.nowPlayingSeriesName,
+            seasonNumber: manager.mrpManager.nowPlayingSeasonNumber,
+            episodeNumber: manager.mrpManager.nowPlayingEpisodeNumber,
+            explicitEpisodeTitle: manager.mrpManager.nowPlayingEpisodeTitle
+        )
 
         let snapshot = RemoteNowPlaying(
             artworkData: state.artworkData,
@@ -715,6 +748,41 @@ final class AppleTVService: ObservableObject {
         if nowPlaying != snapshot {
             nowPlaying = snapshot
         }
+    }
+
+    /// Verify the active Now Playing session while its UI is visible. This timer
+    /// is deliberately independent of the playback-clock timer: it also runs
+    /// while paused or while metadata is empty, allowing a missed app close or
+    /// a missed new-playback push to self-correct. The protocol request contains
+    /// metadata only; artwork is not requested on this cadence.
+    private func updateNowPlayingVerificationTimer() {
+        let shouldRun = (remotePresented || miniRemotePresented) && isConnected
+
+        if shouldRun {
+            guard nowPlayingVerificationTimer == nil else { return }
+            let timer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.verifyVisibleNowPlayingState()
+                }
+            }
+            timer.tolerance = 0.35
+            nowPlayingVerificationTimer = timer
+        } else {
+            stopNowPlayingVerificationTimer()
+        }
+    }
+
+    private func stopNowPlayingVerificationTimer() {
+        nowPlayingVerificationTimer?.invalidate()
+        nowPlayingVerificationTimer = nil
+    }
+
+    private func verifyVisibleNowPlayingState() {
+        guard (remotePresented || miniRemotePresented), isConnected else {
+            updateNowPlayingVerificationTimer()
+            return
+        }
+        manager.mrpManager.verifyNowPlaying()
     }
 
     /// Advance only the visible playback clock between protocol pushes. The
@@ -774,36 +842,70 @@ final class AppleTVService: ObservableObject {
         let episodeTitle: String?
     }
 
-    /// Apple TV apps do not expose TV metadata uniformly. Some send a single
-    /// title such as "Show - S2 · E2 - Episode", while others expose title /
-    /// subtitle / album-like fields. Normalize the common forms without any
-    /// external metadata service.
+    /// Normalize Now Playing metadata globally rather than branching on the
+    /// source app. Structured TV fields from MediaRemote take priority when
+    /// available; combined title parsing remains a compatibility fallback; and
+    /// otherwise the standard artist/subtitle becomes the generic secondary
+    /// line (for example a YouTube channel or music artist).
     private static func parseMediaMetadata(
         rawTitle: String?,
-        subtitle: String?,
-        album: String?
+        secondary: String?,
+        album: String?,
+        explicitSeriesName: String?,
+        seasonNumber: Int?,
+        episodeNumber: Int?,
+        explicitEpisodeTitle: String?
     ) -> ParsedMediaMetadata {
-        let cleanSubtitle = cleaned(subtitle)
+        let cleanSecondary = cleaned(secondary)
         let cleanAlbum = cleaned(album)
+        let cleanSeries = cleaned(explicitSeriesName)
+        let cleanEpisodeTitle = cleaned(explicitEpisodeTitle)
+        let structuredSeasonEpisode = formattedSeasonEpisode(
+            seasonNumber: seasonNumber,
+            episodeNumber: episodeNumber
+        )
 
-        // A number of tvOS apps put the show + season/episode marker in the
-        // primary title but keep the episode title in a separate subtitle
-        // field. Parse the marker even when there is no trailing text after it
-        // and then fill any missing pieces from Apple TV's other local MRP
-        // metadata fields.
+        // AVKit publishes Apple TV episode details as structured MediaRemote
+        // metadata instead of embedding them in the primary title. Treat those
+        // protocol fields as authoritative whenever at least one is present.
+        if cleanSeries != nil || structuredSeasonEpisode != nil || cleanEpisodeTitle != nil {
+            return ParsedMediaMetadata(
+                title: cleanSeries ?? cleaned(rawTitle) ?? cleanAlbum,
+                seasonEpisode: structuredSeasonEpisode,
+                episodeTitle: cleanEpisodeTitle ?? cleanSecondary
+            )
+        }
+
+        // Other tvOS apps can still publish a combined title such as
+        // "Show - S2 · E2 - Episode". Preserve that well-tested fallback.
         if let rawTitle, let parsed = parseCombinedTVTitle(rawTitle) {
             return ParsedMediaMetadata(
                 title: parsed.title ?? cleanAlbum,
                 seasonEpisode: parsed.seasonEpisode,
-                episodeTitle: parsed.episodeTitle ?? cleanSubtitle
+                episodeTitle: parsed.episodeTitle ?? cleanSecondary
             )
         }
 
         return ParsedMediaMetadata(
             title: cleaned(rawTitle) ?? cleanAlbum,
             seasonEpisode: nil,
-            episodeTitle: cleanSubtitle
+            episodeTitle: cleanSecondary
         )
+    }
+
+    private static func formattedSeasonEpisode(
+        seasonNumber: Int?,
+        episodeNumber: Int?
+    ) -> String? {
+        let season = seasonNumber.flatMap { $0 > 0 ? $0 : nil }
+        let episode = episodeNumber.flatMap { $0 > 0 ? $0 : nil }
+
+        switch (season, episode) {
+        case let (season?, episode?): return "S\(season) · E\(episode)"
+        case let (season?, nil): return "S\(season)"
+        case let (nil, episode?): return "E\(episode)"
+        case (nil, nil): return nil
+        }
     }
 
     private static func parseCombinedTVTitle(_ title: String) -> ParsedMediaMetadata? {

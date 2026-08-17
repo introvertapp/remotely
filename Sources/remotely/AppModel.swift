@@ -14,6 +14,7 @@ final class AppModel: ObservableObject {
         static let showNowPlaying = "showNowPlaying"
         static let useMiniRemote = "useMiniRemote"
         static let alwaysOnTop = "alwaysOnTop"
+        static let autoSkipOpeningContent = "autoSkipOpeningContent"
         static let legacyMiniRemoteVisible = "miniRemoteVisible"
     }
 
@@ -57,6 +58,14 @@ final class AppModel: ObservableObject {
         }
     }
 
+    @Published var autoSkipOpeningContent: Bool {
+        didSet {
+            guard autoSkipOpeningContent != oldValue else { return }
+            defaults.set(autoSkipOpeningContent, forKey: DefaultsKey.autoSkipOpeningContent)
+            remote.setAutoSkipOpeningContentEnabled(autoSkipOpeningContent)
+        }
+    }
+
     @Published private(set) var launchAtLoginRequested = false
     @Published private(set) var launchAtLoginStatusText: String?
 
@@ -96,6 +105,12 @@ final class AppModel: ObservableObject {
         }
 
         alwaysOnTop = defaults.bool(forKey: DefaultsKey.alwaysOnTop)
+
+        // Opening-content auto-skip is intentionally opt-in. A missing defaults
+        // value therefore remains false for existing and new installations.
+        autoSkipOpeningContent = defaults.bool(forKey: DefaultsKey.autoSkipOpeningContent)
+        remote.setAutoSkipOpeningContentEnabled(autoSkipOpeningContent)
+
         refreshLaunchAtLoginStatus()
     }
 

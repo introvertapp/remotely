@@ -1,0 +1,553 @@
+--- MRPManager.swift
++++ MRPManager.swift
+@@ -43,6 +43,7 @@
+     private var contentItems: [MRP_ContentItem] = []
+     private var queueLocation: UInt32 = 0
+     private var artworkRequestPending = false
++    private var playbackQueueRequestGeneration: UInt64 = 0
+     private var currentContentIdentifier: String?
+     private var artworkUnavailable = false
+ 
+@@ -53,6 +54,11 @@
+     private var commandsByBundleID: [String: Set<MediaCommand>] = [:]
+     private var skipIntervalsByBundleID: [String: [MediaCommand: Double]] = [:]
+     private var currentPlayerBundleID: String?
++    private var currentPlayerIdentifier: String?
++    /// Once tvOS publishes SetNowPlayingClient/Player, that explicit lifecycle
++    /// selection outranks heuristic `.playing` SetState messages from background
++    /// clients. Nil preserves compatibility with older senders that omit it.
++    private var explicitlySelectedBundleID: String?
+     private var autoSkipOpeningCompletedKeys: Set<String> = []
+     private var autoSkipOpeningPendingKeys: Set<String> = []
+ 
+@@ -83,9 +89,15 @@
+                 self?.commandsByBundleID = [:]
+                 self?.skipIntervalsByBundleID = [:]
+                 self?.currentPlayerBundleID = nil
++                self?.currentPlayerIdentifier = nil
++                self?.explicitlySelectedBundleID = nil
+                 self?.autoSkipOpeningCompletedKeys.removeAll()
+                 self?.autoSkipOpeningPendingKeys.removeAll()
+                 self?.activeAppBundleID = nil
++                self?.nowPlayingSeriesName = nil
++                self?.nowPlayingSeasonNumber = nil
++                self?.nowPlayingEpisodeNumber = nil
++                self?.nowPlayingEpisodeTitle = nil
+                 self?.onDisconnect?(error)
+             }
+         }
+@@ -112,6 +124,7 @@
+         contentItems = []
+         queueLocation = 0
+         artworkRequestPending = false
++        playbackQueueRequestGeneration &+= 1
+         artworkUnavailable = false
+         currentContentIdentifier = nil
+         nowPlaying = nil
+@@ -120,9 +133,15 @@
+         commandsByBundleID = [:]
+         skipIntervalsByBundleID = [:]
+         currentPlayerBundleID = nil
++        currentPlayerIdentifier = nil
++        explicitlySelectedBundleID = nil
+         autoSkipOpeningCompletedKeys.removeAll()
+         autoSkipOpeningPendingKeys.removeAll()
+         activeAppBundleID = nil
++        nowPlayingSeriesName = nil
++        nowPlayingSeasonNumber = nil
++        nowPlayingEpisodeNumber = nil
++        nowPlayingEpisodeTitle = nil
+     }
+ 
+     // MARK: - Media commands
+@@ -296,10 +315,9 @@
+     // MARK: - Message handling
+ 
+     private func handleMessage(_ message: MRP_ProtocolMessage) {
+-        guard message.hasType else { return }
+-        let type = message.type
+-
+-        // Check for pending response handler by identifier
++        // Check for pending response handler by identifier first. Lifecycle
++        // notifications are unsolicited, while request responses must retain
++        // the existing identifier-based dispatch contract.
+         if message.hasIdentifier {
+             let id = message.identifier
+             responseLock.lock()
+@@ -311,7 +329,29 @@
+             }
+         }
+ 
+-        switch type {
++        // The pinned protocol schema names SetNowPlayingClient/Player but does
++        // not include their extension payloads, and predates RemoveClient/Player
++        // enum cases entirely. SwiftProtobuf preserves those fields on the wire,
++        // so inspect the raw type before falling back to generated accessors.
++        switch Self.rawProtocolType(of: message) {
++        case 46:
++            handleSetNowPlayingClient(message)
++            return
++        case 47:
++            handleSetNowPlayingPlayer(message)
++            return
++        case 53:
++            handleRemoveClient(message)
++            return
++        case 54:
++            handleRemovePlayer(message)
++            return
++        default:
++            break
++        }
++
++        guard message.hasType else { return }
++        switch message.type {
+         case .setStateMessage:
+             handleSetState(message)
+         case .updateContentItemMessage:
+@@ -398,25 +438,35 @@
+     // MARK: - Now playing updates
+ 
+     private func bundleIdentifier(from state: MRP_SetStateMessage) -> String? {
+-        guard state.hasPlayerPath,
+-              state.playerPath.hasClient,
+-              state.playerPath.client.hasBundleIdentifier else {
+-            return nil
+-        }
+-        let bundleID = state.playerPath.client.bundleIdentifier
+-        return bundleID.isEmpty ? nil : bundleID
++        bundleIdentifier(from: state.hasPlayerPath ? state.playerPath : nil)
+     }
+ 
+     private func bundleIdentifier(from update: MRP_UpdateContentItemMessage) -> String? {
+-        guard update.hasPlayerPath,
+-              update.playerPath.hasClient,
+-              update.playerPath.client.hasBundleIdentifier else {
++        bundleIdentifier(from: update.hasPlayerPath ? update.playerPath : nil)
++    }
++
++    private func bundleIdentifier(from path: MRP_PlayerPath?) -> String? {
++        guard let path, path.hasClient, path.client.hasBundleIdentifier else {
+             return nil
+         }
+-        let bundleID = update.playerPath.client.bundleIdentifier
++        let bundleID = path.client.bundleIdentifier
+         return bundleID.isEmpty ? nil : bundleID
+     }
+ 
++    private func playerIdentifier(from state: MRP_SetStateMessage) -> String? {
++        playerIdentifier(from: state.hasPlayerPath ? state.playerPath : nil)
++    }
++
++    private func playerIdentifier(from update: MRP_UpdateContentItemMessage) -> String? {
++        playerIdentifier(from: update.hasPlayerPath ? update.playerPath : nil)
++    }
++
++    private func playerIdentifier(from path: MRP_PlayerPath?) -> String? {
++        guard let path, path.hasPlayer, path.player.hasIdentifier else { return nil }
++        let playerID = path.player.identifier
++        return playerID.isEmpty ? nil : playerID
++    }
++
+     private func publishCommands(for bundleID: String) {
+         let commands = commandsByBundleID[bundleID] ?? []
+         let intervals = skipIntervalsByBundleID[bundleID] ?? [:]
+@@ -429,38 +479,149 @@
+         }
+     }
+ 
+-    private func activatePlayer(bundleID: String) {
+-        guard currentPlayerBundleID != bundleID else {
+-            DispatchQueue.main.async {
+-                self.activeAppBundleID = bundleID
+-            }
+-            publishCommands(for: bundleID)
+-            return
+-        }
+-
+-        currentPlayerBundleID = bundleID
+-
+-        // Never carry queue metadata or artwork across media clients. If another
+-        // app becomes the playing client before it has published a queue, an
+-        // empty/degraded Now Playing state is preferable to stale metadata from
+-        // the previous app.
++    /// Clear state that belongs to one concrete playback session. This is used
++    /// whenever MRP explicitly changes/removes the active client or player.
++    /// Keeping it centralized ensures descriptive metadata cannot survive into
++    /// a different app/player while still allowing partial updates for the same
++    /// content item to retain fields that tvOS temporarily omits.
++    private func clearCurrentPlaybackSnapshot() {
+         contentItems = []
+         queueLocation = 0
+         artworkRequestPending = false
++        playbackQueueRequestGeneration &+= 1
+         artworkUnavailable = false
+         currentContentIdentifier = nil
++        autoSkipOpeningCompletedKeys.removeAll()
++        autoSkipOpeningPendingKeys.removeAll()
+ 
+         DispatchQueue.main.async {
+-            self.activeAppBundleID = bundleID
+             self.nowPlaying = nil
++            self.nowPlayingSeriesName = nil
++            self.nowPlayingSeasonNumber = nil
++            self.nowPlayingEpisodeNumber = nil
++            self.nowPlayingEpisodeTitle = nil
++        }
++    }
++
++    /// Select the active MRP owner. A client switch always starts a new playback
++    /// session. Within one client, an explicitly different player identifier is
++    /// also a new session; learning an identifier after SetNowPlayingClient is
++    /// merely identity refinement and does not clear a queue twice.
++    @discardableResult
++    private func activatePlayer(bundleID: String, playerID: String? = nil) -> Bool {
++        let bundleChanged = currentPlayerBundleID != bundleID
++        let knownPlayerChanged =
++            !bundleChanged &&
++            currentPlayerIdentifier != nil &&
++            playerID != nil &&
++            currentPlayerIdentifier != playerID
++        let sessionChanged = bundleChanged || knownPlayerChanged
++
++        if sessionChanged {
++            clearCurrentPlaybackSnapshot()
++        }
++
++        currentPlayerBundleID = bundleID
++        if let playerID {
++            currentPlayerIdentifier = playerID
++        } else if bundleChanged {
++            currentPlayerIdentifier = nil
++        }
++
++        DispatchQueue.main.async {
++            self.activeAppBundleID = bundleID
+         }
+         publishCommands(for: bundleID)
++        return sessionChanged
++    }
++
++    private func currentOwnerMatches(bundleID: String?, playerID: String? = nil) -> Bool {
++        guard let bundleID, bundleID == currentPlayerBundleID else { return false }
++        guard let playerID, let currentPlayerIdentifier else { return true }
++        return playerID == currentPlayerIdentifier
++    }
++
++    private func discardCurrentPlayer(bundleID: String, playerID: String? = nil, removeClient: Bool) {
++        guard currentOwnerMatches(bundleID: bundleID, playerID: playerID) else { return }
++
++        clearCurrentPlaybackSnapshot()
++        currentPlayerBundleID = nil
++        currentPlayerIdentifier = nil
++
++        if removeClient {
++            commandsByBundleID.removeValue(forKey: bundleID)
++            skipIntervalsByBundleID.removeValue(forKey: bundleID)
++        }
++
++        DispatchQueue.main.async {
++            self.activeAppBundleID = nil
++            self.supportedCommands = []
++            self.preferredSkipIntervals = [:]
++        }
++    }
++
++    // MARK: - Explicit MRP now-playing lifecycle
++
++    private func handleSetNowPlayingClient(_ message: MRP_ProtocolMessage) {
++        guard let payload = Self.extensionPayload(number: 50, from: message),
++              let client = Self.firstLengthDelimitedField(number: 1, in: payload).flatMap({ try? MRP_NowPlayingClient(serializedData: $0) }),
++              client.hasBundleIdentifier,
++              !client.bundleIdentifier.isEmpty else { return }
++
++        explicitlySelectedBundleID = client.bundleIdentifier
++        let changed = activatePlayer(bundleID: client.bundleIdentifier)
++        log.info("MRP now-playing client: \(client.bundleIdentifier) changed=\(changed)")
++        requestNowPlayingForLifecycleChange()
++    }
++
++    private func handleSetNowPlayingPlayer(_ message: MRP_ProtocolMessage) {
++        guard let payload = Self.extensionPayload(number: 51, from: message),
++              let path = Self.firstLengthDelimitedField(number: 1, in: payload).flatMap({ try? MRP_PlayerPath(serializedData: $0) }),
++              let bundleID = bundleIdentifier(from: path) else { return }
++
++        let playerID = playerIdentifier(from: path)
++        explicitlySelectedBundleID = bundleID
++        let changed = activatePlayer(bundleID: bundleID, playerID: playerID)
++        log.info("MRP now-playing player: \(bundleID) player=\(playerID ?? "nil") changed=\(changed)")
++        requestNowPlayingForLifecycleChange()
++    }
++
++    private func handleRemoveClient(_ message: MRP_ProtocolMessage) {
++        guard let payload = Self.extensionPayload(number: 57, from: message),
++              let client = Self.firstLengthDelimitedField(number: 1, in: payload).flatMap({ try? MRP_NowPlayingClient(serializedData: $0) }),
++              client.hasBundleIdentifier,
++              !client.bundleIdentifier.isEmpty else { return }
++
++        log.info("MRP remove client: \(client.bundleIdentifier)")
++        if explicitlySelectedBundleID == client.bundleIdentifier {
++            explicitlySelectedBundleID = nil
++        }
++        discardCurrentPlayer(bundleID: client.bundleIdentifier, removeClient: true)
++    }
++
++    private func handleRemovePlayer(_ message: MRP_ProtocolMessage) {
++        guard let payload = Self.extensionPayload(number: 58, from: message),
++              let path = Self.firstLengthDelimitedField(number: 1, in: payload).flatMap({ try? MRP_PlayerPath(serializedData: $0) }),
++              let bundleID = bundleIdentifier(from: path) else { return }
++
++        let playerID = playerIdentifier(from: path)
++        log.info("MRP remove player: \(bundleID) player=\(playerID ?? "nil")")
++        discardCurrentPlayer(bundleID: bundleID, playerID: playerID, removeClient: false)
++    }
++
++    private func requestNowPlayingForLifecycleChange() {
++        // The lifecycle message selects ownership but carries no playback queue.
++        // Request a fresh queue immediately rather than waiting for an unrelated
++        // playback event to shake stale UI state loose. The pending guard prevents
++        // duplicate artwork/queue requests while tvOS is already answering one.
++        requestArtworkIfNeeded()
+     }
+ 
+     private func handleSetState(_ message: MRP_ProtocolMessage) {
+         guard message.hasMRP_setStateMessage else { return }
+         let state = message.MRP_setStateMessage
+         let bundleID = bundleIdentifier(from: state)
++        let playerID = playerIdentifier(from: state)
+ 
+         var parsedCommands: Set<MediaCommand>?
+         var parsedIntervals: [MediaCommand: Double] = [:]
+@@ -491,10 +652,14 @@
+         let isPlaying = state.hasPlaybackState && state.playbackState == .playing
+ 
+         if let bundleID {
+-            if isPlaying {
+-                activatePlayer(bundleID: bundleID)
+-            } else if currentPlayerBundleID == nil && hasQueueItems {
+-                activatePlayer(bundleID: bundleID)
++            let lifecycleAllowsActivation =
++                explicitlySelectedBundleID == nil || explicitlySelectedBundleID == bundleID
++            if lifecycleAllowsActivation {
++                if isPlaying {
++                    activatePlayer(bundleID: bundleID, playerID: playerID)
++                } else if currentPlayerBundleID == nil && hasQueueItems {
++                    activatePlayer(bundleID: bundleID, playerID: playerID)
++                }
+             }
+         }
+ 
+@@ -514,15 +679,13 @@
+         if state.hasPlaybackQueue {
+             let shouldApplyQueue: Bool
+             if let bundleID {
+-                shouldApplyQueue = bundleID == currentPlayerBundleID
++                shouldApplyQueue = currentOwnerMatches(bundleID: bundleID, playerID: playerID)
+             } else {
+                 shouldApplyQueue = currentPlayerBundleID == nil
+             }
+ 
+             if shouldApplyQueue {
+-                let queue = state.playbackQueue
+-                contentItems = queue.contentItems
+-                queueLocation = queue.hasLocation ? queue.location : 0
++                applyPlaybackQueue(state.playbackQueue)
+                 updateNowPlayingFromContentItems()
+                 maybeAutoSkipOpeningContent()
+             }
+@@ -531,7 +694,7 @@
+         if state.hasPlaybackState {
+             let shouldApplyPlaybackState: Bool
+             if let bundleID {
+-                shouldApplyPlaybackState = bundleID == currentPlayerBundleID
++                shouldApplyPlaybackState = currentOwnerMatches(bundleID: bundleID, playerID: playerID)
+             } else {
+                 shouldApplyPlaybackState = currentPlayerBundleID == nil
+             }
+@@ -539,10 +702,16 @@
+             guard shouldApplyPlaybackState else { return }
+ 
+             let pbState = state.playbackState
++            if pbState == .stopped {
++                // A stopped active player is no longer a valid source of visible
++                // metadata. Explicit lifecycle messages will retire ownership;
++                // this is the fallback that immediately retires its snapshot.
++                clearCurrentPlaybackSnapshot()
++                return
++            }
++
+             DispatchQueue.main.async {
+-                if pbState == .stopped {
+-                    self.nowPlaying = nil
+-                } else if var current = self.nowPlaying {
++                if var current = self.nowPlaying {
+                     // Snapshot current position before changing rate
+                     current.elapsedTime = current.currentPosition
+                     current.playbackRate = (pbState == .playing) ? 1 : 0
+@@ -780,7 +949,59 @@
+         return nil
+     }
+ 
+-    /// Minimal protobuf wire reader used only to recover preserved field 67.
++    /// Recover a raw ProtocolMessage type even when the pinned generated enum
++    /// predates that value (notably RemoveClient=53 and RemovePlayer=54).
++    private static func rawProtocolType(of message: MRP_ProtocolMessage) -> UInt64? {
++        guard let serialized = try? message.serializedData(partial: true) else {
++            return message.hasType ? UInt64(message.type.rawValue) : nil
++        }
++        return firstVarintField(number: 1, in: serialized)
++    }
++
++    /// Recover an extension payload omitted by the pinned generated schema.
++    private static func extensionPayload(number: Int, from message: MRP_ProtocolMessage) -> Data? {
++        guard let serialized = try? message.serializedData(partial: true) else { return nil }
++        return firstLengthDelimitedField(number: number, in: serialized)
++    }
++
++    private static func firstVarintField(number wanted: Int, in data: Data) -> UInt64? {
++        var index = 0
++
++        while index < data.count {
++            guard let tag = readVarint(data, index: &index) else { return nil }
++            let fieldNumber = Int(tag >> 3)
++            let wireType = Int(tag & 0x07)
++
++            switch wireType {
++            case 0:
++                guard let value = readVarint(data, index: &index) else { return nil }
++                if fieldNumber == wanted { return value }
++
++            case 1:
++                guard index + 8 <= data.count else { return nil }
++                index += 8
++
++            case 2:
++                guard let rawLength = readVarint(data, index: &index),
++                      rawLength <= UInt64(Int.max) else { return nil }
++                let length = Int(rawLength)
++                guard index + length <= data.count else { return nil }
++                index += length
++
++            case 5:
++                guard index + 4 <= data.count else { return nil }
++                index += 4
++
++            default:
++                return nil
++            }
++        }
++
++        return nil
++    }
++
++    /// Minimal protobuf wire reader used for preserved private metadata and
++    /// lifecycle extensions absent from the pinned generated protocol schema.
+     private static func firstLengthDelimitedField(number wanted: Int, in data: Data) -> Data? {
+         var index = 0
+ 
+@@ -839,19 +1060,54 @@
+ 
+     // MARK: - Content item updates
+ 
++    /// Merge an update into a cached item only when identity is already known to
++    /// be the same. Protobuf merge semantics preserve fields omitted by partial
++    /// tvOS updates while replacing fields explicitly present in the update.
++    /// This prevents ad/recap timing updates from erasing episode metadata.
++    private func mergedContentItem(_ update: MRP_ContentItem, with existing: MRP_ContentItem) -> MRP_ContentItem {
++        guard let serialized = try? update.serializedData(partial: true) else { return update }
++        var merged = existing
++        do {
++            try merged.merge(serializedData: serialized, partial: true)
++            return merged
++        } catch {
++            log.warning("MRP content-item merge failed; using incoming snapshot")
++            return update
++        }
++    }
++
++    private func mergeWithCachedItemIfSame(_ item: MRP_ContentItem) -> MRP_ContentItem {
++        guard item.hasIdentifier, !item.identifier.isEmpty,
++              let existing = contentItems.first(where: {
++                  $0.hasIdentifier && $0.identifier == item.identifier
++              }) else {
++            return item
++        }
++        return mergedContentItem(item, with: existing)
++    }
++
++    private func applyPlaybackQueue(_ queue: MRP_PlaybackQueue) {
++        // Session changes clear contentItems before a new queue is accepted, so
++        // merging by item identifier here can never carry metadata across an app
++        // or player boundary. New identifiers always start from the incoming item.
++        contentItems = queue.contentItems.map { mergeWithCachedItemIfSame($0) }
++        queueLocation = queue.hasLocation ? queue.location : 0
++    }
++
+     private func handleUpdateContentItem(_ message: MRP_ProtocolMessage) {
+         guard message.hasMRP_updateContentItemMessage else { return }
+         let update = message.MRP_updateContentItemMessage
+         let bundleID = bundleIdentifier(from: update)
++        let playerID = playerIdentifier(from: update)
+ 
+-        if let bundleID, bundleID != currentPlayerBundleID {
++        if let bundleID, !currentOwnerMatches(bundleID: bundleID, playerID: playerID) {
+             return
+         }
+ 
+         for item in update.contentItems {
+             if item.hasIdentifier,
+                let idx = contentItems.firstIndex(where: { $0.hasIdentifier && $0.identifier == item.identifier }) {
+-                contentItems[idx] = item
++                contentItems[idx] = mergedContentItem(item, with: contentItems[idx])
+             } else {
+                 contentItems.append(item)
+             }
+@@ -885,11 +1141,16 @@
+         msg.type = .playbackQueueRequestMessage
+         msg.MRP_playbackQueueRequestMessage = request
+ 
++        playbackQueueRequestGeneration &+= 1
++        let generation = playbackQueueRequestGeneration
+         artworkRequestPending = true
+         sendAndReceive(&msg) { [weak self] response in
+-            self?.artworkRequestPending = false
++            guard let self else { return }
++            if self.playbackQueueRequestGeneration == generation {
++                self.artworkRequestPending = false
++            }
+             guard let response, response.hasMRP_setStateMessage else { return }
+-            self?.handleSetState(response)
++            self.handleSetState(response)
+         }
+     }
+ 
+@@ -897,7 +1158,13 @@
+     private func updateNowPlayingFromContentItems() {
+         guard !contentItems.isEmpty else {
+             currentContentIdentifier = nil
+-            DispatchQueue.main.async { self.nowPlaying = nil }
++            DispatchQueue.main.async {
++                self.nowPlaying = nil
++                self.nowPlayingSeriesName = nil
++                self.nowPlayingSeasonNumber = nil
++                self.nowPlayingEpisodeNumber = nil
++                self.nowPlayingEpisodeTitle = nil
++            }
+             return
+         }
+ 
+@@ -925,7 +1192,13 @@
+ 
+         guard hasContent else {
+             currentContentIdentifier = nil
+-            DispatchQueue.main.async { self.nowPlaying = nil }
++            DispatchQueue.main.async {
++                self.nowPlaying = nil
++                self.nowPlayingSeriesName = nil
++                self.nowPlayingSeasonNumber = nil
++                self.nowPlayingEpisodeNumber = nil
++                self.nowPlayingEpisodeTitle = nil
++            }
+             return
+         }
+ 
