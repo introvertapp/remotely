@@ -743,7 +743,7 @@ install_and_launch() {
 
 print_summary() {
   echo
-  echo "remotely v1.2.10 built, signed, installed, and launched successfully."
+  echo "remotely v1.2.11 built, signed, installed, and launched successfully."
   echo "Installed app: /Applications/remotely.app"
   echo "Build log:     $LOG_FILE"
 }

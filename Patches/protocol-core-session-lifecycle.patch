@@ -538,7 +538,7 @@
              } else {
                  contentItems.append(item)
              }
-@@ -885,11 +1177,16 @@
+@@ -885,11 +1177,15 @@
          msg.type = .playbackQueueRequestMessage
          msg.MRP_playbackQueueRequestMessage = request
  
@@ -548,9 +548,8 @@
          sendAndReceive(&msg) { [weak self] response in
 -            self?.artworkRequestPending = false
 +            guard let self else { return }
-+            if self.playbackQueueRequestGeneration == generation {
-+                self.artworkRequestPending = false
-+            }
++            guard self.playbackQueueRequestGeneration == generation else { return }
++            self.artworkRequestPending = false
              guard let response, response.hasMRP_setStateMessage else { return }
 -            self?.handleSetState(response)
 +            self.handleSetState(response)
