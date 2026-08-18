@@ -10,6 +10,13 @@ EXPECTED_BUNDLE_ID="com.local.remotely"
 PREVIOUS_BUNDLE_ID=""
 PREFERENCES_MIGRATION_FILE=""
 
+
+progress_marker() {
+  if [[ "${REMOTELY_BUILD_PIPELINE:-0}" == "1" ]]; then
+    printf '__REMOTELY_PROGRESS__:%d\n' "$1"
+  fi
+}
+
 if [[ ! -d "$SOURCE_APP" ]]; then
   echo "Built app not found at: $SOURCE_APP" >&2
   echo "Run ./scripts/build.sh first." >&2
@@ -48,6 +55,7 @@ if ! codesign --verify --deep --strict "$SOURCE_APP" >/dev/null 2>&1; then
   echo "Built app failed code-signature verification; refusing to install." >&2
   exit 1
 fi
+progress_marker 15
 
 # If an older remotely.app is already installed under a different bundle
 # identifier, preserve its complete preferences domain without hard-coding any
@@ -81,6 +89,7 @@ if [[ -n "$RUNNING_PID" ]]; then
     kill -9 "$RUNNING_PID" 2>/dev/null || true
   fi
 fi
+progress_marker 30
 
 if [[ -n "$PREVIOUS_BUNDLE_ID" && "$PREVIOUS_BUNDLE_ID" != "$EXPECTED_BUNDLE_ID" ]]; then
   PREFERENCES_MIGRATION_FILE="$(mktemp -t remotely-preferences)"
@@ -112,17 +121,20 @@ if [[ -w "$DESTINATION_DIR" ]] && { [[ ! -e "$DESTINATION_APP" ]] || [[ -w "$DES
 else
   install_with_sudo
 fi
+progress_marker 70
 
 if ! codesign --verify --deep --strict "$DESTINATION_APP" >/dev/null 2>&1; then
   echo "Installed app failed code-signature verification." >&2
   exit 1
 fi
+progress_marker 82
 
 INSTALLED_BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$DESTINATION_APP/Contents/Info.plist" 2>/dev/null || true)"
 if [[ "$INSTALLED_BUNDLE_ID" != "$EXPECTED_BUNDLE_ID" ]]; then
   echo "Installed app has an unexpected bundle identifier." >&2
   exit 1
 fi
+progress_marker 90
 
 if [[ -n "$PREFERENCES_MIGRATION_FILE" ]]; then
   /usr/bin/defaults import "$EXPECTED_BUNDLE_ID" "$PREFERENCES_MIGRATION_FILE" >/dev/null
@@ -133,4 +145,6 @@ echo "Installed remotely:"
 echo "  $DESTINATION_APP"
 echo
 echo "Launching installed copy..."
+progress_marker 95
 /usr/bin/open "$DESTINATION_APP"
+progress_marker 99

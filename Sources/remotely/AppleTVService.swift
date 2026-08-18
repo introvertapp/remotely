@@ -51,8 +51,6 @@ final class AppleTVService: ObservableObject {
     @Published private(set) var isPairing = false
     @Published private(set) var isConnected = false
     @Published private(set) var nowPlaying: RemoteNowPlaying?
-    @Published private(set) var canSkipBackward = false
-    @Published private(set) var canSkipForward = false
     @Published private(set) var apps: [RemoteApp] = []
     @Published private(set) var keyboardInputRequested = false
 
@@ -438,26 +436,26 @@ final class AppleTVService: ObservableObject {
         manager.pressButton(.playPause, action: .hold)
     }
 
+    /// Basic transport commands are a remotely capability, not an app-advertised
+    /// UI capability. Some tvOS clients omit or fail to republish SupportedCommands
+    /// even though the standard MRP commands work. Always send the command when
+    /// invoked and let the active receiver handle or ignore it.
     func previousTrack() {
-        guard manager.mrpManager.supportedCommands.contains(.previousTrack) else { return }
         manager.mrpManager.sendCommand(.previousTrack)
         scheduleNowPlayingRefresh(after: 0.45)
     }
 
     func nextTrack() {
-        guard manager.mrpManager.supportedCommands.contains(.nextTrack) else { return }
         manager.mrpManager.sendCommand(.nextTrack)
         scheduleNowPlayingRefresh(after: 0.45)
     }
 
     func rewind10() {
-        guard manager.mrpManager.supportedCommands.contains(.skipBackward) else { return }
         manager.mrpManager.sendSkip(.skipBackward, interval: 10)
         scheduleNowPlayingRefresh(after: 0.30)
     }
 
     func forward10() {
-        guard manager.mrpManager.supportedCommands.contains(.skipForward) else { return }
         manager.mrpManager.sendSkip(.skipForward, interval: 10)
         scheduleNowPlayingRefresh(after: 0.30)
     }
@@ -513,11 +511,10 @@ final class AppleTVService: ObservableObject {
         }
     }
 
-    /// Tell the service whether the full Now Playing surface is actually on
-    /// screen. Protocol pushes remain primary, but while any Now Playing surface
-    /// is visible we also issue a
-    /// lightweight metadata-only verification so missed third-party app teardown
-    /// or start events self-correct without keeping background polling alive.
+    /// Tell the service whether a Now Playing surface is actually on screen.
+    /// Normal MRP pushes remain the source of active metadata. A separate
+    /// foreground verifier only checks whether a previously displayed session
+    /// has become definitively inactive without publishing its teardown event.
     func setRemotePresentation(isVisible: Bool) {
         guard remotePresented != isVisible else { return }
         remotePresented = isVisible
@@ -579,7 +576,6 @@ final class AppleTVService: ObservableObject {
 
         withObservationTracking {
             _ = manager.mrpManager.nowPlaying
-            _ = manager.mrpManager.supportedCommands
             _ = manager.mrpManager.nowPlayingSeriesName
             _ = manager.mrpManager.nowPlayingSeasonNumber
             _ = manager.mrpManager.nowPlayingEpisodeNumber
@@ -669,15 +665,6 @@ final class AppleTVService: ObservableObject {
     }
 
     private func refreshMRPSnapshot() {
-        let skipBackwardNow = manager.mrpManager.supportedCommands.contains(.skipBackward)
-        let skipForwardNow = manager.mrpManager.supportedCommands.contains(.skipForward)
-        if canSkipBackward != skipBackwardNow {
-            canSkipBackward = skipBackwardNow
-        }
-        if canSkipForward != skipForwardNow {
-            canSkipForward = skipForwardNow
-        }
-
         // MRP already requests the initial playback queue as part of session
         // initialization. A missing duration is valid protocol state, so there
         // is no duration-driven retry loop.
@@ -750,11 +737,11 @@ final class AppleTVService: ObservableObject {
         }
     }
 
-    /// Verify the active Now Playing session while its UI is visible. This timer
-    /// is deliberately independent of the playback-clock timer: it also runs
-    /// while paused or while metadata is empty, allowing a missed app close or
-    /// a missed new-playback push to self-correct. The protocol request contains
-    /// metadata only; artwork is not requested on this cadence.
+    /// Every two seconds while a Now Playing surface is visible, ask only
+    /// whether the previously displayed playback session is still alive. Core
+    /// deliberately ignores healthy/partial verifier responses, so this timer
+    /// cannot replace healthy third-party metadata or transport state. It exists only
+    /// to clear a stale card when tvOS confirms stopped or empty playback.
     private func updateNowPlayingVerificationTimer() {
         let shouldRun = (remotePresented || miniRemotePresented) && isConnected
 
@@ -762,7 +749,7 @@ final class AppleTVService: ObservableObject {
             guard nowPlayingVerificationTimer == nil else { return }
             let timer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
                 Task { @MainActor [weak self] in
-                    self?.verifyVisibleNowPlayingState()
+                    self?.verifyVisibleNowPlayingTeardown()
                 }
             }
             timer.tolerance = 0.35
@@ -777,12 +764,12 @@ final class AppleTVService: ObservableObject {
         nowPlayingVerificationTimer = nil
     }
 
-    private func verifyVisibleNowPlayingState() {
+    private func verifyVisibleNowPlayingTeardown() {
         guard (remotePresented || miniRemotePresented), isConnected else {
             updateNowPlayingVerificationTimer()
             return
         }
-        manager.mrpManager.verifyNowPlaying()
+        manager.mrpManager.verifyNowPlayingTeardown()
     }
 
     /// Advance only the visible playback clock between protocol pushes. The

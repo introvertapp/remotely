@@ -38,8 +38,8 @@ grep -q 'static let keyboardPanelHeight: CGFloat = 770' Sources/remotely/AppCons
 grep -q 'static let cornerRadius: CGFloat = 34' Sources/remotely/AppConstants.swift || fail "corner radius changed"
 grep -q 'static let longPressSeconds: Double = 0.65' Sources/remotely/AppConstants.swift || fail "long press threshold changed"
 grep -q '<string>remotely</string>' Resources/Info.plist || fail "remotely bundle name missing"
-grep -q '<string>1.2.1</string>' Resources/Info.plist || fail "v1.2.1 bundle version missing"
-awk '/<key>CFBundleVersion<\/key>/{getline; if ($0 ~ /<string>8<\/string>/) found=1} END{exit found ? 0 : 1}' Resources/Info.plist || fail "v1.2.1 build number 8 missing"
+grep -q '<string>1.2.9</string>' Resources/Info.plist || fail "v1.2.9 bundle version missing"
+awk '/<key>CFBundleVersion<\/key>/{getline; if ($0 ~ /<string>16<\/string>/) found=1} END{exit found ? 0 : 1}' Resources/Info.plist || fail "v1.2.9 build number 16 missing"
 grep -q 'PROTOCOL_CORE_REF="052d9a9a0416d577119316ea813aa3b822b408e5"' "$SCRIPT_DIR/build.sh" || fail "pinned protocol-core revision missing"
 grep -q '<key>CFBundleIconFile</key>' Resources/Info.plist || fail "app icon declaration missing"
 grep -q '<key>LSUIElement</key>' Resources/Info.plist || fail "LSUIElement missing"
@@ -67,18 +67,32 @@ grep -q 'currentPlayerIdentifier' Patches/protocol-core-session-lifecycle.patch 
 grep -q 'explicitlySelectedBundleID' Patches/protocol-core-session-lifecycle.patch || fail "explicit now-playing client selector missing from patch"
 grep -q 'lifecycleAllowsActivation' Patches/protocol-core-session-lifecycle.patch || fail "lifecycle-over-heuristic activation gate missing from patch"
 grep -q 'playbackQueueRequestGeneration' Patches/protocol-core-session-lifecycle.patch || fail "queue request generation guard missing from patch"
-grep -q 'protocol-core-now-playing-verification.patch' "$SCRIPT_DIR/build.sh" || fail "MRP visible Now Playing verification patch integration missing"
-[[ -f Patches/protocol-core-now-playing-verification.patch ]] || fail "MRP visible Now Playing verification patch missing"
-grep -q 'public func verifyNowPlaying()' Patches/protocol-core-now-playing-verification.patch || fail "core lightweight Now Playing verification API missing"
-grep -q 'request.includeMetadata = true' Patches/protocol-core-now-playing-verification.patch || fail "core Now Playing verifier metadata request missing"
-grep -q 'request.returnContentItemAssetsInUserCompletion = false' Patches/protocol-core-now-playing-verification.patch || fail "core Now Playing verifier must suppress content-item assets"
-! grep -q 'artworkWidth\|artworkHeight' Patches/protocol-core-now-playing-verification.patch || fail "core periodic Now Playing verifier must not request artwork dimensions"
-grep -q 'nowPlayingVerificationGeneration' Patches/protocol-core-now-playing-verification.patch || fail "core Now Playing verifier stale-response guard missing"
-grep -q 'private var nowPlayingVerificationTimer: Timer?' Sources/remotely/AppleTVService.swift || fail "visible Now Playing verification timer missing"
-grep -Fq 'let shouldRun = (remotePresented || miniRemotePresented) && isConnected' Sources/remotely/AppleTVService.swift || fail "Now Playing verification is not visibility/connection gated"
-grep -q 'withTimeInterval: 2.0, repeats: true' Sources/remotely/AppleTVService.swift || fail "Now Playing verification cadence must remain two seconds"
-grep -q 'manager.mrpManager.verifyNowPlaying()' Sources/remotely/AppleTVService.swift || fail "service does not invoke lightweight Now Playing verification"
-grep -q 'stopNowPlayingVerificationTimer()' Sources/remotely/AppleTVService.swift || fail "Now Playing verifier shutdown path missing"
+grep -q 'explicitlySelectedBundleID == bundleID || currentPlayerBundleID == bundleID' Patches/protocol-core-session-lifecycle.patch || fail "SetNowPlayingPlayer must not activate an unrelated client"
+grep -q 'if !removeClient, let playerID' Patches/protocol-core-session-lifecycle.patch || fail "RemovePlayer active-player identity guard missing"
+grep -q 'Some third-party players use Stopped as a' Patches/protocol-core-session-lifecycle.patch || fail "transient stopped queue-retention correction missing"
+grep -q 'if pbState == .playing, nowPlaying == nil, !contentItems.isEmpty' Patches/protocol-core-session-lifecycle.patch || fail "retained queue resume path missing"
+# v1.2.5 preserves the two-second stale-card correction without allowing
+# periodic queue requests to overwrite healthy third-party playback state.
+grep -q 'protocol-core-now-playing-verification.patch' "$SCRIPT_DIR/build.sh" || fail "teardown-only Now Playing verification patch integration missing"
+[[ -f Patches/protocol-core-now-playing-verification.patch ]] || fail "teardown-only Now Playing verification patch missing"
+grep -q 'public func verifyNowPlayingTeardown()' Patches/protocol-core-now-playing-verification.patch || fail "teardown-only core verifier API missing"
+grep -q 'nowPlayingVerificationPending' Patches/protocol-core-now-playing-verification.patch || fail "single-flight verifier guard missing"
+grep -q 'guard reportsStopped || reportsEmptyQueue else { return }' Patches/protocol-core-now-playing-verification.patch || fail "verifier is not restricted to stopped/empty playback"
+grep -q 'state.playbackState == .playing { return }' Patches/protocol-core-now-playing-verification.patch || fail "verifier playing-state protection missing"
+grep -q 'request.returnContentItemAssetsInUserCompletion = false' Patches/protocol-core-now-playing-verification.patch || fail "verifier must suppress content-item assets"
+! grep -A35 'public func verifyNowPlayingTeardown()' Patches/protocol-core-now-playing-verification.patch | grep -q 'handleSetState(response)' || fail "teardown verifier still routes healthy responses through SetState"
+grep -A28 'private func clearVerifiedInactivePlayback()' Patches/protocol-core-now-playing-verification.patch | grep -q 'commandsByBundleID.removeValue' || fail "verified teardown must retire stale per-client command cache"
+grep -A28 'private func clearVerifiedInactivePlayback()' Patches/protocol-core-now-playing-verification.patch | grep -q 'skipIntervalsByBundleID.removeValue' || fail "verified teardown must retire stale per-client skip interval cache"
+grep -q 'RemoveClient is authoritative for the lifetime of that client' Patches/protocol-core-session-lifecycle.patch || fail "confirmed RemoveClient cache retirement missing"
+grep -q 'private var nowPlayingVerificationTimer: Timer?' Sources/remotely/AppleTVService.swift || fail "visible stale-session verification timer missing"
+grep -Fq 'let shouldRun = (remotePresented || miniRemotePresented) && isConnected' Sources/remotely/AppleTVService.swift || fail "stale-session verifier is not visibility/connection gated"
+grep -q 'withTimeInterval: 2.0, repeats: true' Sources/remotely/AppleTVService.swift || fail "stale-session verification cadence must remain two seconds"
+grep -q 'manager.mrpManager.verifyNowPlayingTeardown()' Sources/remotely/AppleTVService.swift || fail "service does not invoke teardown-only verifier"
+grep -q 'stopNowPlayingVerificationTimer()' Sources/remotely/AppleTVService.swift || fail "stale-session verifier shutdown path missing"
+# Existing event-driven and explicit refresh paths must remain available for
+# populating metadata; the verifier is never a replacement path.
+grep -q 'manager.mrpManager.refreshNowPlaying()' Sources/remotely/AppleTVService.swift || fail "one-shot Now Playing refresh path missing"
+grep -q 'scheduleNowPlayingRefresh(after:' Sources/remotely/AppleTVService.swift || fail "post-command one-shot refresh path missing"
 grep -q 'nowPlayingSeasonNumber' Sources/remotely/AppleTVService.swift || fail "structured season metadata bridge missing"
 grep -q 'nowPlayingEpisodeNumber' Sources/remotely/AppleTVService.swift || fail "structured episode metadata bridge missing"
 grep -q 'nowPlayingEpisodeTitle' Sources/remotely/AppleTVService.swift || fail "structured episode-title metadata bridge missing"
@@ -126,7 +140,7 @@ grep -q 'GeometryReader { geometry in' Sources/remotely/AppsView.swift || fail "
 grep -q '.aspectRatio(contentMode: .fill)' Sources/remotely/AppsView.swift || fail "third-party Apps artwork must fill landscape tiles"
 grep -q 'private func builtInSymbol(for app: RemoteApp)' Sources/remotely/AppsView.swift || fail "system-app generic artwork mapping missing"
 grep -q 'app.bundleID.hasPrefix("com.apple.")' Sources/remotely/AppsView.swift || fail "Apple system-app fallback missing"
-# v1.2.1 Apps launcher custom ordering with stable edit-mode animation.
+# v1.2.1 Apps launcher custom ordering retained in the maintenance rollback.
 grep -q '@State private var isEditing = false' Sources/remotely/AppsView.swift || fail "Apps edit-mode state missing"
 grep -q 'LongPressGesture(minimumDuration: 0.5, maximumDistance: 10)' Sources/remotely/AppsView.swift || fail "Apps long-press edit gesture missing"
 grep -q 'DragGesture(' Sources/remotely/AppsView.swift || fail "Apps reorder drag gesture missing"
@@ -137,7 +151,6 @@ grep -q 'UserDefaults.standard.set(' Sources/remotely/AppsView.swift || fail "Ap
 ! grep -q 'repeatForever' Sources/remotely/AppsView.swift || fail "Apps edit animation still uses uncancellable repeatForever state"
 grep -q 'private struct AppTileWiggleModifier: ViewModifier' Sources/remotely/AppsView.swift || fail "Apps stable wiggle modifier missing"
 grep -Fq '.phaseAnimator([false, true])' Sources/remotely/AppsView.swift || fail "Apps phase-based wiggle animation missing"
-
 [[ -f Sources/remotely/AppArtworkLoader.swift ]] || fail "optional App Store artwork loader missing"
 grep -q 'fetchAppArtworkDefaultsKey = "fetchAppArtworkFromAppStore"' Sources/remotely/AppConstants.swift || fail "app artwork preference key missing"
 grep -q '@AppStorage(AppConstants.fetchAppArtworkDefaultsKey) private var fetchAppArtwork = false' Sources/remotely/PreferencesView.swift || fail "disabled-by-default artwork preference missing"
@@ -288,15 +301,16 @@ grep -q 'remoteService.refreshNowPlaying()' Sources/remotely/AppController.swift
 
 echo "Panel presentation invariants: PASS"
 
-# retains native MRP skip commands independently of timeline metadata.
-grep -q '@Published private(set) var canSkipBackward = false' Sources/remotely/AppleTVService.swift || fail "skip-backward availability bridge missing"
-grep -q '@Published private(set) var canSkipForward = false' Sources/remotely/AppleTVService.swift || fail "skip-forward availability bridge missing"
-grep -q 'supportedCommands.contains(.skipBackward)' Sources/remotely/AppleTVService.swift || fail "skip-backward command capability check missing"
-grep -q 'supportedCommands.contains(.skipForward)' Sources/remotely/AppleTVService.swift || fail "skip-forward command capability check missing"
+# Basic transport is a remotely-level capability while connected. Optional
+# per-client SupportedCommands advertising must never disable standard playback UI.
+! grep -q 'canSkipBackward\|canSkipForward' Sources/remotely/AppleTVService.swift Sources/remotely/RemoteView.swift Sources/remotely/MiniRemoteView.swift || fail "legacy advertised skip-capability UI gate remains"
+! grep -q 'supportedCommands.contains(.previousTrack)\|supportedCommands.contains(.nextTrack)\|supportedCommands.contains(.skipBackward)\|supportedCommands.contains(.skipForward)' Sources/remotely/AppleTVService.swift || fail "basic transport still depends on advertised SupportedCommands"
+grep -q 'manager.mrpManager.sendCommand(.previousTrack)' Sources/remotely/AppleTVService.swift || fail "unconditional previous-track sender missing"
+grep -q 'manager.mrpManager.sendCommand(.nextTrack)' Sources/remotely/AppleTVService.swift || fail "unconditional next-track sender missing"
 grep -q 'manager.mrpManager.sendSkip(.skipBackward, interval: 10)' Sources/remotely/AppleTVService.swift || fail "native 10-second backward skip missing"
 grep -q 'manager.mrpManager.sendSkip(.skipForward, interval: 10)' Sources/remotely/AppleTVService.swift || fail "native 10-second forward skip missing"
-grep -q 'enabled: state != nil && service.canSkipBackward' Sources/remotely/RemoteView.swift || fail "rewind UI is not capability-driven"
-grep -q 'enabled: state != nil && service.canSkipForward' Sources/remotely/RemoteView.swift || fail "forward UI is not capability-driven"
+grep -q 'enabled: service.isConnected' Sources/remotely/RemoteView.swift || fail "Remote basic transport is not connection-gated"
+grep -q 'enabled: service.isConnected' Sources/remotely/MiniRemoteView.swift || fail "MiniRemote basic transport is not connection-gated"
 if grep -q 'seek(to: max(0, state.position - 10))' Sources/remotely/AppleTVService.swift; then fail "rewind still synthesizes an absolute seek"; fi
 if grep -q 'seek(to: min(state.duration, state.position + 10))' Sources/remotely/AppleTVService.swift; then fail "forward still synthesizes an absolute seek"; fi
 if grep -q 'bounded-recovery' Sources/remotely/AppleTVService.swift; then fail "removed duration-driven bounded recovery remains"; fi
@@ -367,19 +381,6 @@ grep -q 'explicitlySelectedBundleID == nil || explicitlySelectedBundleID == bund
 grep -q 'Applying MRP session lifecycle and partial-metadata correction' "$SCRIPT_DIR/build.sh" || fail "build does not apply session-lifecycle correction"
 
 echo "MRP session lifecycle / metadata retention invariants: PASS"
-
-# v1.1.4 hybrid Now Playing refresh: event-driven MRP remains primary, while
-# the visible full Now Playing surface periodically verifies metadata without
-# requesting artwork. Hidden UI must not poll.
-grep -q 'Applying lightweight MRP Now Playing verification support' "$SCRIPT_DIR/build.sh" || fail "build does not apply visible Now Playing verification support"
-[[ "$(grep -c 'updateNowPlayingVerificationTimer()' Sources/remotely/AppleTVService.swift)" -ge 3 ]] || fail "visible Now Playing verification lifecycle missing"
-grep -Fq '(remotePresented || miniRemotePresented) && isConnected' Sources/remotely/AppleTVService.swift || fail "hidden/disconnected Now Playing verification gate missing"
-grep -q 'manager.mrpManager.verifyNowPlaying()' Sources/remotely/AppleTVService.swift || fail "periodic verification does not reach protocol core"
-if sed -n '/public func verifyNowPlaying()/,/^    }/p' Patches/protocol-core-now-playing-verification.patch | grep -q 'artworkWidth\|artworkHeight'; then
-  fail "periodic Now Playing verification requests artwork dimensions"
-fi
-
-echo "Visible Now Playing verification invariants: PASS"
 
 # Keyboard Search: Companion text-input focus drives a live RTI field
 # above the clickpad. Every edit is mirrored immediately; only tvOS focus-end
@@ -499,11 +500,44 @@ grep -Fq 'designated_requirement' "$SCRIPT_DIR/build.sh" || { echo "Designated-r
 grep -Fq '*cdhash*' "$SCRIPT_DIR/build.sh" || { echo "Build-specific cdhash rejection is missing." >&2; exit 1; }
 echo "Stable local code-signing invariants: PASS"
 
-# single-command build/install pipeline and fixed multi-stage progress dashboard.
-grep -Fq 'STAGE_LABELS=(' "$SCRIPT_DIR/build.sh" || fail "fixed build-stage dashboard labels missing"
-for stage in   "Checking build environment"   "Validating source"   "Fetching external dependencies"   "Building release"   "Signing application"   "Installing and launching"; do
-  grep -Fq "$stage" "$SCRIPT_DIR/build.sh" || fail "build dashboard stage missing: $stage"
+# Single-command build/install pipeline with a fixed six-row Terminal.app
+# dashboard. Every task row is exactly 53 columns, all rows are visible from the
+# start, real progress rewrites only the matching row, and the cursor stays
+# hidden until the dashboard is complete. No timer-driven/fabricated progress.
+grep -Fq 'STAGE_LABELS=(' "$SCRIPT_DIR/build.sh" || fail "fixed build-stage labels missing"
+for stage in \
+  "Checking environment" \
+  "Validating source" \
+  "Fetching dependencies" \
+  "Building release" \
+  "Signing application" \
+  "Installing & launching"; do
+  grep -Fq "$stage" "$SCRIPT_DIR/build.sh" || fail "build stage missing: $stage"
 done
+grep -Fq 'BAR_WIDTH=24' "$SCRIPT_DIR/build.sh" || fail "fixed 24-cell progress bar missing"
+grep -Fq 'LABEL_WIDTH=22' "$SCRIPT_DIR/build.sh" || fail "fixed build label width missing"
+grep -Fq 'DASHBOARD_LINES=${#STAGE_LABELS[@]}' "$SCRIPT_DIR/build.sh" || fail "fixed dashboard row count missing"
+grep -Fq 'show_initial_dashboard()' "$SCRIPT_DIR/build.sh" || fail "initial all-task dashboard renderer missing"
+grep -Fq 'progress_line "$i" 0 pending >&3' "$SCRIPT_DIR/build.sh" || fail "pending task rows are not pre-rendered"
+grep -Fq "printf '\\033[%dA\\r%s\\033[%dB\\r'" "$SCRIPT_DIR/build.sh" || fail "fixed-row Terminal.app repaint missing"
+grep -Fq "printf '\\033[?25l' >&3" "$SCRIPT_DIR/build.sh" || fail "build cursor hide sequence missing"
+grep -Fq "printf '\\033[?25h' >&3" "$SCRIPT_DIR/build.sh" || fail "build cursor restore sequence missing"
+grep -Fq 'trap cleanup_terminal EXIT INT TERM' "$SCRIPT_DIR/build.sh" || fail "cursor restore trap missing"
+! grep -Fq '\\033[2K' "$SCRIPT_DIR/build.sh" || fail "line-clear repaint sequence should not be needed"
+! grep -Fq 'sleep 0.25' "$SCRIPT_DIR/build.sh" || fail "timer-driven progress remains"
+! grep -Fq 'kill -0 "$pid"' "$SCRIPT_DIR/build.sh" || fail "background polling progress remains"
+! grep -Fq 'STAGE_TICK_DIVISORS' "$SCRIPT_DIR/build.sh" || fail "fabricated time-based progress divisors remain"
+grep -Fq 'git_progress_filter' "$SCRIPT_DIR/build.sh" || fail "Git transfer progress parser missing"
+grep -Fq 'fetch --progress --depth 1' "$SCRIPT_DIR/build.sh" || fail "Git fetch native progress missing"
+grep -Fq 'clone --progress --depth 1' "$SCRIPT_DIR/build.sh" || fail "Git clone native progress missing"
+grep -Fq 'swift_build_progress_filter' "$SCRIPT_DIR/build.sh" || fail "SwiftPM build progress parser missing"
+grep -Fq 'if [[ "$line" =~ \[([0-9]+)/([0-9]+)\] ]]' "$SCRIPT_DIR/build.sh" || fail "SwiftPM current/total counter parser missing"
+grep -Fq 'seen * 90 / total_sections' "$SCRIPT_DIR/build.sh" || fail "validation-section progress missing"
+grep -Fq 'report_progress 70' "$SCRIPT_DIR/build.sh" || fail "concrete stage checkpoint progress missing"
+grep -Fq 'REMOTELY_BUILD_PIPELINE=1 "$SCRIPT_DIR/install.sh"' "$SCRIPT_DIR/build.sh" || fail "build does not invoke stable installer"
+grep -Fq '__REMOTELY_PROGRESS__:' "$SCRIPT_DIR/install.sh" || fail "installer progress checkpoints missing"
+grep -Fq 'prepare_install_authorization' "$SCRIPT_DIR/build.sh" || fail "install authorization preflight missing"
+grep -Fq 'show_initial_dashboard' "$SCRIPT_DIR/build.sh" || fail "all-task dashboard is not shown before build stages"
 grep -Fq 'run_step 0 preflight_environment' "$SCRIPT_DIR/build.sh" || fail "build pipeline preflight stage missing"
 grep -Fq 'run_step 1 validate_sources' "$SCRIPT_DIR/build.sh" || fail "build does not run source validation automatically"
 grep -Fq 'run_step 2 fetch_external_dependencies' "$SCRIPT_DIR/build.sh" || fail "dependency preparation stage missing"
@@ -511,33 +545,44 @@ grep -Fq 'run_step 3 build_release_app' "$SCRIPT_DIR/build.sh" || fail "release 
 grep -Fq 'run_step 4 sign_application' "$SCRIPT_DIR/build.sh" || fail "signing stage missing"
 grep -Fq 'run_step 5 install_and_launch' "$SCRIPT_DIR/build.sh" || fail "install/launch stage missing"
 grep -Fq 'LOG_FILE="$LOG_DIR/build.log"' "$SCRIPT_DIR/build.sh" || fail "persistent compact-build log path missing"
-! grep -Fq 'Overall' "$SCRIPT_DIR/build.sh" || fail "overall progress UI must remain removed"
-! grep -Fq 'activity_bar()' "$SCRIPT_DIR/build.sh" || fail "bouncing activity-bar implementation must remain removed"
-grep -Fq 'STAGE_PROGRESS=' "$SCRIPT_DIR/build.sh" || fail "monotonic per-stage progress state missing"
-grep -Fq 'advance_stage_progress()' "$SCRIPT_DIR/build.sh" || fail "monotonic progress advancement helper missing"
-grep -Fq "printf '\\033[?25l'" "$SCRIPT_DIR/build.sh" || fail "progress dashboard must hide the terminal cursor while redrawing"
-grep -Fq "printf '\\033[?25h'" "$SCRIPT_DIR/build.sh" || fail "progress dashboard must restore the terminal cursor"
-grep -Fq 'stage_marker' "$SCRIPT_DIR/build.sh" || fail "per-stage completion marker missing"
-grep -Fq "done) printf '[✓]'" "$SCRIPT_DIR/build.sh" || fail "completed-stage checkmark missing"
-grep -Fq 'render_dashboard' "$SCRIPT_DIR/build.sh" || fail "fixed multi-stage dashboard renderer missing"
 grep -Fq 'tail -n 35 "$LOG_FILE"' "$SCRIPT_DIR/build.sh" || fail "failure log-tail reporting missing"
-grep -Fq 'REMOTELY_BUILD_PIPELINE=1 "$SCRIPT_DIR/install.sh"' "$SCRIPT_DIR/build.sh" || fail "build does not invoke stable installer"
-echo "integrated build/dashboard invariants: PASS"
+echo "integrated build/live progress invariants: PASS"
+
 grep -Fq '#!/bin/bash' "$SCRIPT_DIR/build.sh" || fail "build.sh must use the stable /bin/bash interpreter"
-! grep -Eq 'local[[:space:]]+status=' "$SCRIPT_DIR/build.sh" || fail "build progress runner uses zsh-reserved status variable"
-grep -Fq 'local step_exit_code=0' "$SCRIPT_DIR/build.sh" || fail "build progress runner exit-code variable missing"
+! grep -Eq 'local[[:space:]]+status=' "$SCRIPT_DIR/build.sh" || fail "build runner uses zsh-reserved status variable"
+grep -Fq 'local step_exit_code=0' "$SCRIPT_DIR/build.sh" || fail "build runner exit-code variable missing"
 grep -Fq -- '--self-test-progress' "$SCRIPT_DIR/build.sh" || fail "build progress runtime self-test mode missing"
-progress_output="$($SCRIPT_DIR/build.sh --self-test-progress 2>&1)" || fail "build progress runtime self-test failed"
+
+progress_file="$(mktemp "${TMPDIR:-/tmp}/remotely-progress-selftest.XXXXXX")"
+initial_dashboard="$(mktemp "${TMPDIR:-/tmp}/remotely-progress-dashboard.XXXXXX")"
+if ! "$SCRIPT_DIR/build.sh" --self-test-progress > "$progress_file" 2>&1; then
+  rm -f "$progress_file" "$initial_dashboard"
+  fail "build progress runtime self-test failed"
+fi
+[[ "$(LC_ALL=C tr -cd '\n' < "$progress_file" | wc -c | tr -d ' ')" == "6" ]] || { rm -f "$progress_file" "$initial_dashboard"; fail "progress self-test must create exactly six physical task rows"; }
+LC_ALL=C grep -Fq $'\033[?25l' "$progress_file" || { rm -f "$progress_file" "$initial_dashboard"; fail "progress self-test did not hide the cursor"; }
+LC_ALL=C grep -Fq $'\033[?25h' "$progress_file" || { rm -f "$progress_file" "$initial_dashboard"; fail "progress self-test did not restore the cursor"; }
+[[ "$(LC_ALL=C grep -Fo $'\033[?25l' "$progress_file" | wc -l | tr -d ' ')" == "1" ]] || { rm -f "$progress_file" "$initial_dashboard"; fail "progress self-test hid the cursor more than once"; }
+[[ "$(LC_ALL=C grep -Fo $'\033[?25h' "$progress_file" | wc -l | tr -d ' ')" == "1" ]] || { rm -f "$progress_file" "$initial_dashboard"; fail "progress self-test restored the cursor more than once"; }
+# Skip the six-byte cursor-hide sequence, then capture the six rows printed at launch.
+dd if="$progress_file" of="$initial_dashboard" bs=1 skip=6 count=324 2>/dev/null
+awk 'length($0) != 53 { exit 1 }' "$initial_dashboard" || { rm -f "$progress_file" "$initial_dashboard"; fail "initial progress dashboard rows are not fixed at 53 columns"; }
 for stage in "Self-test one" "Self-test two" "Self-test three" "Self-test four" "Self-test five" "Self-test six"; do
-  grep -Fq "$stage" <<< "$progress_output" || fail "progress self-test did not render every stage: $stage"
+  [[ "$(grep -Fc "$stage" "$initial_dashboard" | tr -d ' ')" == "1" ]] || { rm -f "$progress_file" "$initial_dashboard"; fail "initial dashboard did not list stage exactly once: $stage"; }
 done
-grep -Fq '[✓] Self-test six' <<< "$progress_output" || fail "progress self-test did not render final completion checkmark"
-! grep -Fq 'Overall' <<< "$progress_output" || fail "progress self-test unexpectedly rendered overall progress"
-[[ "$progress_output" == *'█'* ]] || fail "progress self-test did not render solid-block progress bars"
-[[ "$progress_output" == *$'\033[?25l'* ]] || fail "progress self-test did not hide cursor during dashboard redraw"
-[[ "$progress_output" == *$'\033[?25h'* ]] || fail "progress self-test did not restore cursor after dashboard redraw"
-! grep -Fq '====>' <<< "$progress_output" || fail "legacy arrow progress style remains"
-echo "build dashboard runtime self-test: PASS"
+for bar in \
+  '[####--------------------]' \
+  '[##########--------------]' \
+  '[################--------]' \
+  '[#######################-]' \
+  '[########################]'; do
+  grep -Fq "$bar" "$progress_file" || { rm -f "$progress_file" "$initial_dashboard"; fail "progress self-test did not render intermediate bar: $bar"; }
+done
+[[ "$(grep -Fo '[########################]' "$progress_file" | wc -l | tr -d ' ')" == "6" ]] || { rm -f "$progress_file" "$initial_dashboard"; fail "progress self-test did not finish all six tasks with a full bar"; }
+LC_ALL=C grep -Fq $'\033[6A' "$progress_file" || { rm -f "$progress_file" "$initial_dashboard"; fail "progress self-test did not update the first dashboard row in place"; }
+LC_ALL=C grep -Fq $'\033[1A' "$progress_file" || { rm -f "$progress_file" "$initial_dashboard"; fail "progress self-test did not update the final dashboard row in place"; }
+rm -f "$progress_file" "$initial_dashboard"
+echo "build fixed-dashboard progress runtime self-test: PASS"
 
 # local-signing transport compatibility and quiet dependency checkout.
 grep -q 'P12_PASSWORD="$(openssl rand -hex 24)"' "$SCRIPT_DIR/setup_signing.sh" || fail "random non-empty PKCS12 password missing"
@@ -595,7 +640,7 @@ grep -q 'speaker.wave.1.fill' Sources/remotely/MiniRemoteView.swift || fail "Min
 grep -q 'gobackward.10' Sources/remotely/MiniRemoteView.swift || fail "MiniRemote rewind control missing"
 grep -q 'goforward.10' Sources/remotely/MiniRemoteView.swift || fail "MiniRemote forward control missing"
 grep -q 'play.fill' Sources/remotely/MiniRemoteView.swift || fail "MiniRemote play/pause control missing"
-grep -q '<string>1.2.1</string>' Resources/Info.plist || fail "v1.2.1 bundle version missing"
+grep -q '<string>1.2.9</string>' Resources/Info.plist || fail "v1.2.9 bundle version missing"
 echo "configurable presentation / login item / exclusive MiniRemote invariants: PASS"
 # MiniRemote layout: timeline labels must not clip and controls remain
 # vertically separated from the timeline.
@@ -679,5 +724,5 @@ grep -q '.frame(width: AppConstants.panelContentWidth, height: 190)' Sources/rem
 grep -q '.frame(width: 82, height: 166)' Sources/remotely/RemoteView.swift || fail "full Remote Now Playing artwork does not match MiniRemote geometry"
 grep -q 'frame(minWidth: 52, alignment: .trailing)' Sources/remotely/NowPlayingShared.swift || fail "hour-long remaining-time field can regress to wrapping"
 grep -q '.fixedSize(horizontal: true, vertical: false)' Sources/remotely/NowPlayingShared.swift || fail "timeline time labels are not forced to one line"
-grep -q '<string>1.2.1</string>' Resources/Info.plist || fail "v1.2.1 bundle version missing"
+grep -q '<string>1.2.9</string>' Resources/Info.plist || fail "v1.2.9 bundle version missing"
 echo "top-edge dragging / shared Now Playing invariants: PASS"

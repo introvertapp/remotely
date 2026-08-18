@@ -15,8 +15,8 @@ PROTOBUF_DIR="$VENDOR_DIR/swift-protobuf"
 APP="$ROOT_DIR/dist/remotely.app"
 LOG_DIR="$HOME/Library/Logs/remotely"
 LOG_FILE="$LOG_DIR/build.log"
-BAR_WIDTH=28
-USE_PROGRESS_UI=true
+BAR_WIDTH=24
+LABEL_WIDTH=22
 SELF_TEST_PROGRESS=false
 if [[ "${1:-}" == "--self-test-progress" ]]; then
   SELF_TEST_PROGRESS=true
@@ -32,9 +32,9 @@ mkdir -p "$(dirname "$LOG_FILE")"
   echo
 } >> "$LOG_FILE"
 
-if [[ ! -t 1 || "${TERM:-}" == "dumb" ]]; then
-  USE_PROGRESS_UI=false
-fi
+# Preserve the Terminal.app output descriptor before stage commands are routed
+# to the build log. Progress updates always write to this descriptor directly.
+exec 3>&1
 
 repeat_char() {
   local count="$1"
@@ -47,61 +47,30 @@ repeat_char() {
   printf '%s' "$result"
 }
 
-cell_bar() {
-  local filled="$1"
-  if (( filled < 0 )); then filled=0; fi
-  if (( filled > BAR_WIDTH )); then filled="$BAR_WIDTH"; fi
-  local empty=$(( BAR_WIDTH - filled ))
-  printf '[%s%s]' "$(repeat_char "$filled" '█')" "$(repeat_char "$empty" ' ')"
-}
-
 STAGE_LABELS=(
-  "Checking build environment"
+  "Checking environment"
   "Validating source"
-  "Fetching external dependencies"
+  "Fetching dependencies"
   "Building release"
   "Signing application"
-  "Installing and launching"
+  "Installing & launching"
 )
-STAGE_STATES=("pending" "pending" "pending" "pending" "pending" "pending")
-STAGE_PROGRESS=(0 0 0 0 0 0)
-# Progress is deliberately monotonic. Each running stage fills left-to-right at
-# a conservative stage-specific cadence, then snaps to full only when the stage
-# actually succeeds. No numeric percentage is claimed for operations (Git,
-# SwiftPM, codesign) that do not expose one unified reliable percentage.
-STAGE_TICK_DIVISORS=(2 3 12 22 3 3)
-DASHBOARD_RENDERED=false
+
+CURRENT_STAGE_INDEX=-1
+CURRENT_PROGRESS_FILE=""
 DASHBOARD_LINES=${#STAGE_LABELS[@]}
 CURSOR_HIDDEN=false
 
-stage_marker() {
-  case "$1" in
-    done) printf '[✓]' ;;
-    running) printf '[ ]' ;;
-    failed) printf '[✗]' ;;
-    *) printf '[ ]' ;;
-  esac
-}
-
-stage_bar() {
-  local index="$1"
-  case "${STAGE_STATES[$index]}" in
-    done) cell_bar "$BAR_WIDTH" ;;
-    running|failed) cell_bar "${STAGE_PROGRESS[$index]}" ;;
-    *) cell_bar 0 ;;
-  esac
-}
-
 hide_cursor() {
-  if [[ "$USE_PROGRESS_UI" == true && "$CURSOR_HIDDEN" == false ]]; then
-    printf '\033[?25l'
+  if [[ "$CURSOR_HIDDEN" == false ]]; then
+    printf '\033[?25l' >&3
     CURSOR_HIDDEN=true
   fi
 }
 
 show_cursor() {
   if [[ "$CURSOR_HIDDEN" == true ]]; then
-    printf '\033[?25h'
+    printf '\033[?25h' >&3
     CURSOR_HIDDEN=false
   fi
 }
@@ -111,40 +80,71 @@ cleanup_terminal() {
 }
 trap cleanup_terminal EXIT INT TERM
 
-render_dashboard() {
-  local i
-  if [[ "$USE_PROGRESS_UI" == true ]]; then
-    hide_cursor
-    if [[ "$DASHBOARD_RENDERED" == true ]]; then
-      # The cursor is hidden while rows are rewritten, preventing the visible
-      # up/down cursor bounce seen with the earlier dashboard implementation.
-      printf '\033[%dA' "$DASHBOARD_LINES"
-    fi
+progress_line() {
+  local stage_index="$1"
+  local percent="$2"
+  local state="${3:-running}"
+  local marker=' '
+  local filled empty
 
-    for (( i = 0; i < ${#STAGE_LABELS[@]}; i++ )); do
-      printf '\r\033[2K%s %-31s %s\n' \
-        "$(stage_marker "${STAGE_STATES[$i]}")" \
-        "${STAGE_LABELS[$i]}" \
-        "$(stage_bar "$i")"
-    done
-    DASHBOARD_RENDERED=true
-  fi
+  if (( percent < 0 )); then percent=0; fi
+  if (( percent > 100 )); then percent=100; fi
+  filled=$(( percent * BAR_WIDTH / 100 ))
+  empty=$(( BAR_WIDTH - filled ))
+
+  case "$state" in
+    done) marker='✓' ;;
+    failed) marker='x' ;;
+  esac
+
+  # Fixed at 53 display columns. Every dashboard row therefore remains one
+  # physical Terminal.app line in the project's ~60-column build window.
+  printf '[%s] %-*s [%s%s]' \
+    "$marker" "$LABEL_WIDTH" "${STAGE_LABELS[$stage_index]}" \
+    "$(repeat_char "$filled" '#')" "$(repeat_char "$empty" '-')"
 }
 
 show_initial_dashboard() {
-  if [[ "$USE_PROGRESS_UI" == true ]]; then
-    render_dashboard
-  else
-    local i
-    for (( i = 0; i < ${#STAGE_LABELS[@]}; i++ )); do
-      printf '[ ] %s\n' "${STAGE_LABELS[$i]}"
-    done
+  local i
+  hide_cursor
+  for (( i = 0; i < DASHBOARD_LINES; i++ )); do
+    progress_line "$i" 0 pending >&3
+    printf '\n' >&3
+  done
+}
+
+render_progress() {
+  local stage_index="$1"
+  local percent="$2"
+  local state="${3:-running}"
+  local rows_up=$(( DASHBOARD_LINES - stage_index ))
+
+  # The cursor normally rests on the blank row immediately below the fixed
+  # six-line dashboard. Move to exactly one task row, rewrite that 53-column
+  # row, then return to the anchor row. No task line is ever reprinted.
+  printf '\033[%dA\r%s\033[%dB\r' \
+    "$rows_up" "$(progress_line "$stage_index" "$percent" "$state")" "$rows_up" >&3
+}
+
+report_progress() {
+  local percent="$1"
+  local previous=0
+
+  [[ -n "$CURRENT_PROGRESS_FILE" ]] || return 0
+  if [[ -f "$CURRENT_PROGRESS_FILE" ]]; then
+    previous="$(cat "$CURRENT_PROGRESS_FILE" 2>/dev/null || printf '0')"
   fi
+  [[ "$previous" =~ ^[0-9]+$ ]] || previous=0
+  if (( percent <= previous )); then
+    return 0
+  fi
+  if (( percent > 99 )); then percent=99; fi
+  printf '%s\n' "$percent" > "$CURRENT_PROGRESS_FILE"
+  render_progress "$CURRENT_STAGE_INDEX" "$percent" running
 }
 
 show_failure_details() {
   local label="$1"
-  show_cursor
   echo >&2
   echo "Build failed during: $label" >&2
   echo "Build details (last 35 lines):" >&2
@@ -153,30 +153,18 @@ show_failure_details() {
   echo "Full log: $LOG_FILE" >&2
 }
 
-advance_stage_progress() {
-  local stage_index="$1"
-  local tick="$2"
-  local divisor="${STAGE_TICK_DIVISORS[$stage_index]}"
-  local target=$(( tick / divisor ))
-  local max_running=$(( BAR_WIDTH - 1 ))
-  if (( target > max_running )); then target="$max_running"; fi
-  if (( target > STAGE_PROGRESS[$stage_index] )); then
-    STAGE_PROGRESS[$stage_index]="$target"
-  fi
-}
-
 run_step() {
   local stage_index="$1"
   shift
   local label="${STAGE_LABELS[$stage_index]}"
+  local progress_file="${TMPDIR:-/tmp}/remotely-build-stage-$$-$stage_index.progress"
+  local step_exit_code=0
+  local last_progress=0
 
-  STAGE_STATES[$stage_index]="running"
-  STAGE_PROGRESS[$stage_index]=0
-  if [[ "$USE_PROGRESS_UI" == true ]]; then
-    render_dashboard
-  else
-    printf '[ ] %s\n' "$label"
-  fi
+  CURRENT_STAGE_INDEX="$stage_index"
+  CURRENT_PROGRESS_FILE="$progress_file"
+  printf '0\n' > "$progress_file"
+  render_progress "$stage_index" 0 running
 
   {
     echo
@@ -184,71 +172,135 @@ run_step() {
     echo "Started: $(date)"
   } >> "$LOG_FILE"
 
-  ( "$@" ) >> "$LOG_FILE" 2>&1 &
-  local pid=$!
-  local tick=0
-  while kill -0 "$pid" 2>/dev/null; do
-    tick=$(( tick + 1 ))
-    advance_stage_progress "$stage_index" "$tick"
-    if [[ "$USE_PROGRESS_UI" == true ]]; then
-      render_dashboard
-    fi
-    sleep 0.25
-  done
-
-  local step_exit_code=0
-  if wait "$pid"; then
+  # Keep command output in the detailed log. The function runs in a subshell so
+  # existing defensive `exit 1` paths cannot terminate build.sh before this
+  # wrapper can finish the status row and show diagnostics.
+  if ( "$@" ) >> "$LOG_FILE" 2>&1; then
     step_exit_code=0
   else
     step_exit_code=$?
   fi
 
+  if [[ -f "$progress_file" ]]; then
+    last_progress="$(cat "$progress_file" 2>/dev/null || printf '0')"
+  fi
+  [[ "$last_progress" =~ ^[0-9]+$ ]] || last_progress=0
+  rm -f "$progress_file"
+
   if (( step_exit_code != 0 )); then
-    STAGE_STATES[$stage_index]="failed"
-    if [[ "$USE_PROGRESS_UI" == true ]]; then
-      render_dashboard
-    else
-      printf '[✗] %s\n' "$label" >&2
-    fi
+    render_progress "$stage_index" "$last_progress" failed
+    show_cursor
     show_failure_details "$label"
     exit "$step_exit_code"
   fi
 
   echo "Completed: $(date)" >> "$LOG_FILE"
-  STAGE_PROGRESS[$stage_index]="$BAR_WIDTH"
-  STAGE_STATES[$stage_index]="done"
-  if [[ "$USE_PROGRESS_UI" == true ]]; then
-    render_dashboard
-  else
-    printf '[✓] %s\n' "$label"
-  fi
+  render_progress "$stage_index" 100 done
+}
+
+git_progress_filter() {
+  local range_start="$1"
+  local range_span="$2"
+  local line raw_percent mapped receiving_span resolving_start resolving_span
+
+  receiving_span=$(( range_span * 9 / 10 ))
+  resolving_start=$(( range_start + receiving_span ))
+  resolving_span=$(( range_span - receiving_span ))
+
+  while IFS= read -r line; do
+    printf '%s\n' "$line"
+    if [[ "$line" == *"Receiving objects:"* && "$line" =~ ([0-9]{1,3})% ]]; then
+      raw_percent="${BASH_REMATCH[1]}"
+      if (( raw_percent > 100 )); then raw_percent=100; fi
+      mapped=$(( range_start + raw_percent * receiving_span / 100 ))
+      report_progress "$mapped"
+    elif [[ "$line" == *"Resolving deltas:"* && "$line" =~ ([0-9]{1,3})% ]]; then
+      raw_percent="${BASH_REMATCH[1]}"
+      if (( raw_percent > 100 )); then raw_percent=100; fi
+      mapped=$(( resolving_start + raw_percent * resolving_span / 100 ))
+      report_progress "$mapped"
+    fi
+  done
+}
+
+swift_build_progress_filter() {
+  local line current total mapped
+
+  while IFS= read -r line; do
+    printf '%s\n' "$line"
+    if [[ "$line" =~ \[([0-9]+)/([0-9]+)\] ]]; then
+      current="${BASH_REMATCH[1]}"
+      total="${BASH_REMATCH[2]}"
+      if (( total > 0 )); then
+        mapped=$(( 5 + current * 80 / total ))
+        report_progress "$mapped"
+      fi
+    fi
+  done
 }
 
 preflight_environment() {
   local tool
+  local checked=0
+  local total=10
+
   for tool in swift git codesign security patch ditto open; do
     if ! command -v "$tool" >/dev/null 2>&1; then
       echo "$tool is not available. Install Xcode or the Xcode Command Line Tools first." >&2
       return 1
     fi
+    checked=$(( checked + 1 ))
+    report_progress $(( checked * 90 / total ))
   done
+
   if [[ ! -x "$SCRIPT_DIR/validate_source.sh" ]]; then
     echo "validate_source.sh is missing or not executable." >&2
     return 1
   fi
+  checked=$(( checked + 1 ))
+  report_progress $(( checked * 90 / total ))
+
   if [[ ! -x "$SCRIPT_DIR/install.sh" ]]; then
     echo "install.sh is missing or not executable." >&2
     return 1
   fi
+  checked=$(( checked + 1 ))
+  report_progress $(( checked * 90 / total ))
+
   if [[ ! -x "$SCRIPT_DIR/setup_signing.sh" ]]; then
     echo "setup_signing.sh is missing or not executable." >&2
     return 1
   fi
+  checked=$(( checked + 1 ))
+  report_progress 95
+
   swift --version
+  report_progress 99
 }
 
 validate_sources() {
-  "$SCRIPT_DIR/validate_source.sh"
+  local total_sections
+  total_sections="$(grep -c 'echo ".*: PASS"' "$SCRIPT_DIR/validate_source.sh" || true)"
+  [[ "$total_sections" =~ ^[0-9]+$ ]] || total_sections=0
+  if (( total_sections < 1 )); then total_sections=1; fi
+
+  "$SCRIPT_DIR/validate_source.sh" 2>&1 | while IFS= read -r line; do
+    local seen_file="${CURRENT_PROGRESS_FILE}.validation-count"
+    local seen=0
+    printf '%s\n' "$line"
+    if [[ "$line" == *": PASS" ]]; then
+      if [[ -f "$seen_file" ]]; then
+        seen="$(cat "$seen_file" 2>/dev/null || printf '0')"
+      fi
+      [[ "$seen" =~ ^[0-9]+$ ]] || seen=0
+      seen=$(( seen + 1 ))
+      printf '%s\n' "$seen" > "$seen_file"
+      report_progress $(( 5 + seen * 90 / total_sections ))
+    fi
+  done
+  local validation_exit_code=$?
+  rm -f "${CURRENT_PROGRESS_FILE}.validation-count"
+  return "$validation_exit_code"
 }
 
 clone_exact_revision() {
@@ -260,10 +312,15 @@ clone_exact_revision() {
   mkdir -p "$destination"
   git -C "$destination" init -q
   git -C "$destination" remote add origin "$url"
-  # Public source checkout only. Disable interactive credential prompting so a
-  # personal build can never unexpectedly ask for a GitHub login.
-  GIT_TERMINAL_PROMPT=0 git -c credential.helper= -C "$destination" fetch -q --depth 1 origin "$revision"
+  report_progress 3
+
+  # Git's own transfer percentages drive this portion of the bar. Convert its
+  # carriage-return progress records to lines only inside the build log parser;
+  # Terminal.app still receives just our one fixed-width stage row.
+  GIT_TERMINAL_PROMPT=0 git -c credential.helper= -C "$destination"     fetch --progress --depth 1 origin "$revision" 2>&1     | tr '\r' '\n'     | git_progress_filter 3 27
+
   git -c advice.detachedHead=false -C "$destination" checkout -q --detach FETCH_HEAD
+  report_progress 30
 }
 
 clone_exact_tag() {
@@ -272,7 +329,8 @@ clone_exact_tag() {
   local destination="$3"
 
   rm -rf "$destination"
-  GIT_TERMINAL_PROMPT=0 git -c credential.helper= -c advice.detachedHead=false clone -q --depth 1 --branch "$tag" "$url" "$destination"
+  GIT_TERMINAL_PROMPT=0 git -c credential.helper= -c advice.detachedHead=false     clone --progress --depth 1 --branch "$tag" "$url" "$destination" 2>&1     | tr '\r' '\n'     | git_progress_filter 30 20
+  report_progress 50
 }
 
 prepare_vendor_sources() {
@@ -290,6 +348,7 @@ prepare_vendor_sources() {
     echo "Fetching SwiftProtobuf $SWIFT_PROTOBUF_TAG source..."
     clone_exact_tag "https://github.com/apple/swift-protobuf.git" "$SWIFT_PROTOBUF_TAG" "$PROTOBUF_DIR"
   fi
+  report_progress 50
 
   # SwiftProtobuf 1.31 includes an optional protoc binary target. SwiftPM may
   # download that public GitHub Release artifact even though this app only needs
@@ -385,6 +444,7 @@ RUNTIME_MANIFEST
   grep -q 'meta.hasPlaybackRate ||' "$mrp_manager" || { echo "Core playback-rate validity signal missing after patch." >&2; exit 1; }
   grep -q 'item.hasArtworkData' "$mrp_manager" || { echo "Core artwork validity signal missing after patch." >&2; exit 1; }
   grep -q 'let hasContent = hasTextContent || hasPlaybackContent' "$mrp_manager" || { echo "Core combined Now Playing validity predicate missing after patch." >&2; exit 1; }
+  report_progress 55
 
   # v1.9.9 retains the validated MRP player isolation correction. tvOS can
   # publish SetState for several clients during one session; capabilities, queue
@@ -406,6 +466,7 @@ RUNTIME_MANIFEST
   grep -q 'private func activatePlayer(bundleID: String)' "$mrp_manager" || { echo "Core player activation helper missing after patch." >&2; exit 1; }
   grep -q 'guard shouldApplyPlaybackState else { return }' "$mrp_manager" || { echo "Core inactive-player playback-state guard missing after patch." >&2; exit 1; }
   grep -q 'bundleID != currentPlayerBundleID' "$mrp_manager" || { echo "Core inactive-player content-update guard missing after patch." >&2; exit 1; }
+  report_progress 60
 
   # Opening-content auto-skip uses the AVKit main-content boundary preserved in
   # opaque MediaRemote metadata. Apply this only after player isolation so its
@@ -426,6 +487,7 @@ RUNTIME_MANIFEST
   grep -q 'position <= 10' "$mrp_manager" || { echo "Core playback-start safety window missing after patch." >&2; exit 1; }
   grep -q 'autoSkipOpeningCompletedKeys.insert(key)' "$mrp_manager" || { echo "Core one-shot auto-skip guard missing after patch." >&2; exit 1; }
   grep -q 'self.seekToPosition(currentTarget)' "$mrp_manager" || { echo "Core main-content seek missing after patch." >&2; exit 1; }
+  report_progress 65
 
   # Normalize structured MediaRemote TV metadata at the protocol boundary so
   # remotely renders the same title / season-episode / secondary-line model
@@ -446,6 +508,7 @@ RUNTIME_MANIFEST
   grep -q 'mdta/com.apple.hls.episode-title' "$mrp_manager" || { echo "Core HLS episode-title key missing after patch." >&2; exit 1; }
   grep -q 'avkt/com.apple.avkit.seasonNumber' "$mrp_manager" || { echo "Core AVKit season-number key missing after patch." >&2; exit 1; }
   grep -q 'avkt/com.apple.avkit.episodeNumber' "$mrp_manager" || { echo "Core AVKit episode-number key missing after patch." >&2; exit 1; }
+  report_progress 70
 
   # v1.1.3 follows MRP's explicit now-playing client/player lifecycle so app
   # switches retire stale sessions immediately. It also protobuf-merges partial
@@ -473,27 +536,38 @@ RUNTIME_MANIFEST
   grep -q 'try merged.merge(serializedData: serialized, partial: true)' "$mrp_manager" || { echo "Core same-item partial metadata merge missing after patch." >&2; exit 1; }
   grep -q 'currentOwnerMatches(bundleID: bundleID, playerID: playerID)' "$mrp_manager" || { echo "Core player-scoped stale-update guard missing after patch." >&2; exit 1; }
   grep -q 'playbackQueueRequestGeneration' "$mrp_manager" || { echo "Core lifecycle queue-request generation guard missing after patch." >&2; exit 1; }
+  grep -q 'explicitlySelectedBundleID == bundleID || currentPlayerBundleID == bundleID' "$mrp_manager" || { echo "Core SetNowPlayingPlayer still activates an unrelated client." >&2; exit 1; }
+  grep -q 'if !removeClient, let playerID' "$mrp_manager" || { echo "Core RemovePlayer active-player identity guard missing." >&2; exit 1; }
+  grep -q 'Some third-party players use Stopped as a' "$mrp_manager" || { echo "Core transient-stopped queue retention missing." >&2; exit 1; }
+  grep -q 'if pbState == .playing, nowPlaying == nil, !contentItems.isEmpty' "$mrp_manager" || { echo "Core retained-queue resume path missing." >&2; exit 1; }
+  report_progress 76
 
-  # v1.1.4 keeps protocol pushes primary but verifies Now Playing while its UI
-  # is visible. This request is metadata-only so a two-second foreground cadence
-  # cannot turn into repeated artwork downloads.
+  # v1.2.5 retains the two-second visible-UI stale-session check as teardown-only.
+  # Healthy/partial responses must never flow through normal SetState processing,
+  # and only one verifier request may be outstanding. Basic transport UI does not
+  # depend on per-client SupportedCommands advertising.
   local now_playing_verification_patch="$ROOT_DIR/Patches/protocol-core-now-playing-verification.patch"
   if [[ ! -f "$now_playing_verification_patch" ]]; then
-    echo "MRP Now Playing verification patch is missing; refusing to continue." >&2
+    echo "MRP teardown-only Now Playing verification patch is missing; refusing to continue." >&2
     exit 1
   fi
-  echo "Applying lightweight MRP Now Playing verification support..."
+  echo "Applying teardown-only MRP Now Playing verification support..."
   if ! patch -d "$(dirname "$mrp_manager")" -p0 --forward --batch < "$now_playing_verification_patch"; then
-    echo "Protocol core changed and the Now Playing verification patch no longer applies cleanly; refusing to guess." >&2
+    echo "Protocol core changed and the teardown-only Now Playing verification patch no longer applies cleanly; refusing to guess." >&2
     exit 1
   fi
-  grep -q 'public func verifyNowPlaying()' "$mrp_manager" || { echo "Core lightweight Now Playing verifier missing after patch." >&2; exit 1; }
-  grep -q 'request.includeMetadata = true' "$mrp_manager" || { echo "Core metadata-only verifier does not request metadata." >&2; exit 1; }
+  grep -q 'public func verifyNowPlayingTeardown()' "$mrp_manager" || { echo "Core teardown-only Now Playing verifier missing after patch." >&2; exit 1; }
+  grep -q 'private var nowPlayingVerificationPending = false' "$mrp_manager" || { echo "Core verifier single-flight guard missing after patch." >&2; exit 1; }
+  grep -q 'self.handleNowPlayingTeardownVerification(response.MRP_setStateMessage)' "$mrp_manager" || { echo "Core verifier response gate missing after patch." >&2; exit 1; }
+  grep -q 'guard reportsStopped || reportsEmptyQueue else { return }' "$mrp_manager" || { echo "Core verifier is not restricted to conclusive teardown state." >&2; exit 1; }
+  grep -q 'if state.hasPlaybackState && state.playbackState == .playing { return }' "$mrp_manager" || { echo "Core verifier lacks playing-state protection." >&2; exit 1; }
   grep -q 'request.returnContentItemAssetsInUserCompletion = false' "$mrp_manager" || { echo "Core verifier still requests content-item assets." >&2; exit 1; }
-  grep -q 'nowPlayingVerificationGeneration' "$mrp_manager" || { echo "Core verifier stale-response generation guard missing." >&2; exit 1; }
+  ! grep -A35 'public func verifyNowPlayingTeardown()' "$mrp_manager" | grep -q 'handleSetState(response)' || { echo "Core teardown verifier still mutates healthy SetState/queue state." >&2; exit 1; }
+  report_progress 82
 
-  # Native MRP skip-forward/backward is capability-driven and does not require
-  # duration metadata merely to expose the ±10-second transport controls.
+  # Native MRP exposes standard transport senders directly. remotely intentionally
+  # does not gate basic playback UI on optional per-client SupportedCommands
+  # advertising, which some otherwise-compatible tvOS apps omit on resume.
   local media_command="$(find "$CORE_DIR/Sources" -type f -path '*/Models/MediaCommand.swift' -print -quit)"
   if [[ -z "$media_command" || ! -f "$media_command" ]]; then
     echo "Core no longer contains MediaCommand.swift; refusing to guess." >&2
@@ -532,6 +606,7 @@ RUNTIME_MANIFEST
   grep -q 'eventName == "_tiStarted" || eventName == "_tiStopped"' "$apple_tv_manager" || { echo "Core Companion keyboard event handling missing after patch." >&2; exit 1; }
   grep -Fq 'self?.updateTextInputFocus(from: response["_c"])' "$apple_tv_manager" || { echo "Core initial keyboard-focus snapshot missing after patch." >&2; exit 1; }
   grep -q 'self?.sentText = result.currentText' "$apple_tv_manager" || { echo "Core text-session state synchronization missing after patch." >&2; exit 1; }
+  report_progress 88
 
   grep -q 'public var installedApps:' "$apple_tv_manager" || { echo "Core lacks installedApps support." >&2; exit 1; }
   grep -q 'public func fetchApps()' "$apple_tv_manager" || { echo "Core lacks fetchApps support." >&2; exit 1; }
@@ -553,19 +628,26 @@ RUNTIME_MANIFEST
     echo "Could not remove patch backup artifacts from vendored protocol core." >&2
     exit 1
   fi
+  report_progress 90
 }
 
 
 fetch_external_dependencies() {
   prepare_vendor_sources
+  report_progress 92
   swift package resolve
+  report_progress 99
 }
 
 build_release_app() {
-  swift build -c release
+  report_progress 2
+  swift build -c release 2>&1 | swift_build_progress_filter
+  report_progress 87
+
   local bin_dir
   bin_dir="$(swift build -c release --show-bin-path)"
   local executable="$bin_dir/remotely"
+  report_progress 90
 
   if [[ ! -x "$executable" ]]; then
     echo "Build completed but executable was not found at: $executable" >&2
@@ -574,9 +656,12 @@ build_release_app() {
 
   rm -rf "$ROOT_DIR/dist"
   mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+  report_progress 93
   cp "$executable" "$APP/Contents/MacOS/remotely"
+  report_progress 96
   cp "$ROOT_DIR/Resources/Info.plist" "$APP/Contents/Info.plist"
   cp "$ROOT_DIR/Resources/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
+  report_progress 99
 }
 
 find_signing_identity_hash() {
@@ -586,10 +671,12 @@ find_signing_identity_hash() {
 
 sign_application() {
   local signing_identity_hash
+  report_progress 10
   signing_identity_hash="$(find_signing_identity_hash)"
   if [[ -z "$signing_identity_hash" ]]; then
     echo "Stable signing identity not found: $SIGNING_IDENTITY_NAME"
     echo "Provisioning the local signing identity..."
+    report_progress 20
     if ! REMOTELY_SIGNING_IDENTITY="$SIGNING_IDENTITY_NAME" "$SCRIPT_DIR/setup_signing.sh"; then
       echo "Automatic signing setup failed; no ad-hoc signature was created." >&2
       return 1
@@ -601,10 +688,13 @@ sign_application() {
       return 1
     fi
   fi
+  report_progress 45
 
   echo "Signing identity: $SIGNING_IDENTITY_NAME ($signing_identity_hash)"
   codesign --force --deep --sign "$signing_identity_hash" "$APP"
+  report_progress 70
   codesign --verify --strict --deep --verbose=2 "$APP"
+  report_progress 85
 
   local designated_requirement
   designated_requirement="$(codesign -d -r- "$APP" 2>&1 | sed -n 's/^designated => //p')"
@@ -622,6 +712,7 @@ sign_application() {
     echo "Designated requirement: $designated_requirement" >&2
     return 1
   fi
+  report_progress 99
   echo "Stable designated requirement: $designated_requirement"
 }
 
@@ -636,51 +727,59 @@ prepare_install_authorization() {
 }
 
 install_and_launch() {
-  REMOTELY_BUILD_PIPELINE=1 "$SCRIPT_DIR/install.sh"
+  REMOTELY_BUILD_PIPELINE=1 "$SCRIPT_DIR/install.sh" 2>&1 | while IFS= read -r line; do
+    if [[ "$line" =~ ^__REMOTELY_PROGRESS__:([0-9]+)$ ]]; then
+      report_progress "${BASH_REMATCH[1]}"
+    else
+      printf '%s\n' "$line"
+    fi
+  done
 }
 
 print_summary() {
   echo
-  echo "remotely v1.1.4 built, signed, installed, and launched successfully."
+  echo "remotely v1.2.9 built, signed, installed, and launched successfully."
   echo "Installed app: /Applications/remotely.app"
   echo "Build log:     $LOG_FILE"
 }
 
+self_test_progress_step() {
+  # Real builds never use timed/fabricated movement. The self-test emits a few
+  # deterministic checkpoints only to exercise the same fixed-width repaint
+  # path and verify that intermediate states overwrite one physical row.
+  report_progress 20
+  report_progress 45
+  report_progress 70
+  report_progress 99
+}
+
 if [[ "$SELF_TEST_PROGRESS" == true ]]; then
-  # Exercise the same fixed multi-stage dashboard used by real builds. This
-  # catches shell/runtime and cursor-redraw failures before packaging.
-  USE_PROGRESS_UI=true
   STAGE_LABELS=("Self-test one" "Self-test two" "Self-test three" "Self-test four" "Self-test five" "Self-test six")
-  STAGE_STATES=("pending" "pending" "pending" "pending" "pending" "pending")
-  STAGE_PROGRESS=(0 0 0 0 0 0)
-  STAGE_TICK_DIVISORS=(1 1 1 1 1 1)
   DASHBOARD_LINES=${#STAGE_LABELS[@]}
-  DASHBOARD_RENDERED=false
-  CURSOR_HIDDEN=false
   show_initial_dashboard
-  run_step 0 sleep 0.55
-  run_step 1 sleep 0.55
-  run_step 2 sleep 0.55
-  run_step 3 sleep 0.55
-  run_step 4 sleep 0.55
-  run_step 5 sleep 0.55
+  run_step 0 self_test_progress_step
+  run_step 1 self_test_progress_step
+  run_step 2 self_test_progress_step
+  run_step 3 self_test_progress_step
+  run_step 4 self_test_progress_step
+  run_step 5 self_test_progress_step
   show_cursor
   rm -f "$LOG_FILE"
   exit 0
 fi
 
+# Any installation authorization prompt must happen before the fixed dashboard
+# is drawn so it cannot shift the dashboard's cursor anchor. Cursor hiding starts
+# first and remains active through the entire visible build.
+hide_cursor
+prepare_install_authorization
 show_initial_dashboard
+
 run_step 0 preflight_environment
 run_step 1 validate_sources
 run_step 2 fetch_external_dependencies
 run_step 3 build_release_app
 run_step 4 sign_application
-
-# Authenticate before the final progress step if /Applications requires admin
-# rights. Restore the cursor first so any password prompt remains normal and
-# visible, then the final progress stage hides it again while redrawing.
-show_cursor
-prepare_install_authorization
 run_step 5 install_and_launch
 show_cursor
 print_summary

@@ -24,9 +24,9 @@
 ## Features
 
 - Full Apple TV remote with clickpad, navigation, playback, volume, and power controls
-- Now Playing artwork and normalized local metadata (show/season/episode, episode title, or creator/channel), with explicit MRP session switching, same-item metadata retention through Apple TV pre-roll, and lightweight visible-UI verification to recover missed app start/teardown updates, plus seekable timeline and ±10 second skipping
+- Now Playing artwork and normalized local metadata (show/season/episode, episode title, or creator/channel), with explicit MRP session switching, same-item metadata retention through Apple TV pre-roll, and a teardown-only visible-UI stale-session check that cannot replace healthy playback state, plus seekable timeline and always-available basic playback controls including ±10 second skipping
 - MiniRemote for a compact always-available control surface
-- Optional 'Auto-skip tv ads and pre-roll sequences'
+- Optional **Auto-skip tv ads and pre-roll sequences** using Apple TV’s published main-content boundary
 - Launch installed Apple TV apps directly from macOS
 - Keyboard Search when Apple TV requests text input
 - Discover, pair, and switch between multiple Apple TVs

@@ -425,7 +425,7 @@ private struct NowPlayingBlock: View {
             mediaButton(
                 symbol: "gobackward.10",
                 label: "Rewind 10 Seconds",
-                enabled: state != nil && service.canSkipBackward,
+                enabled: service.isConnected,
                 size: 16,
                 action: service.rewind10
             )
@@ -435,7 +435,7 @@ private struct NowPlayingBlock: View {
             mediaButton(
                 symbol: state?.isPlaying == true ? "pause.fill" : "play.fill",
                 label: state?.isPlaying == true ? "Pause" : "Play",
-                enabled: state != nil,
+                enabled: service.isConnected,
                 size: 18,
                 action: service.playPause
             )
@@ -445,7 +445,7 @@ private struct NowPlayingBlock: View {
             mediaButton(
                 symbol: "goforward.10",
                 label: "Forward 10 Seconds",
-                enabled: state != nil && service.canSkipForward,
+                enabled: service.isConnected,
                 size: 16,
                 action: service.forward10
             )

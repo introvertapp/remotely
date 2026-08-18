@@ -152,7 +152,7 @@
      private func publishCommands(for bundleID: String) {
          let commands = commandsByBundleID[bundleID] ?? []
          let intervals = skipIntervalsByBundleID[bundleID] ?? [:]
-@@ -429,38 +479,149 @@
+@@ -429,38 +479,178 @@
          }
      }
  
@@ -235,21 +235,43 @@
 +    }
 +
 +    private func discardCurrentPlayer(bundleID: String, playerID: String? = nil, removeClient: Bool) {
-+        guard currentOwnerMatches(bundleID: bundleID, playerID: playerID) else { return }
-+
-+        clearCurrentPlaybackSnapshot()
-+        currentPlayerBundleID = nil
-+        currentPlayerIdentifier = nil
-+
++        // RemoveClient is authoritative for the lifetime of that client. Retire
++        // its cached command metadata even when it is not the visible owner, so
++        // a later client with the same bundle cannot inherit stale capabilities.
++        // This cleanup is independent of current Now Playing ownership.
 +        if removeClient {
 +            commandsByBundleID.removeValue(forKey: bundleID)
 +            skipIntervalsByBundleID.removeValue(forKey: bundleID)
 +        }
 +
-+        DispatchQueue.main.async {
-+            self.activeAppBundleID = nil
-+            self.supportedCommands = []
-+            self.preferredSkipIntervals = [:]
++        guard bundleID == currentPlayerBundleID else { return }
++
++        // A client can own several players. RemovePlayer only retires the active
++        // player when we can prove the removed identifier is the one selected.
++        // If our active identifier is unknown, a specific background-player
++        // removal must not destroy an otherwise healthy client session.
++        if !removeClient, let playerID {
++            guard let currentPlayerIdentifier, currentPlayerIdentifier == playerID else { return }
++        }
++
++        clearCurrentPlaybackSnapshot()
++        currentPlayerIdentifier = nil
++
++        if removeClient {
++            currentPlayerBundleID = nil
++            DispatchQueue.main.async {
++                self.activeAppBundleID = nil
++                self.supportedCommands = []
++                self.preferredSkipIntervals = [:]
++            }
++        } else {
++            // Removing the active player does not remove its client. Keep the
++            // client selected so a replacement/default player from the same app
++            // can repopulate Now Playing without requiring another client event.
++            DispatchQueue.main.async {
++                self.activeAppBundleID = bundleID
++            }
++            publishCommands(for: bundleID)
 +        }
 +    }
 +
@@ -273,7 +295,14 @@
 +              let bundleID = bundleIdentifier(from: path) else { return }
 +
 +        let playerID = playerIdentifier(from: path)
-+        explicitlySelectedBundleID = bundleID
++        // SetNowPlayingPlayer selects a player *within* a client; it does not
++        // make that client the active Now Playing application. Background
++        // clients legitimately publish player changes, so only refine the
++        // player identity when this bundle is already the selected/active client.
++        guard explicitlySelectedBundleID == bundleID || currentPlayerBundleID == bundleID else {
++            log.info("MRP player selection ignored for inactive client: \(bundleID) player=\(playerID ?? "nil")")
++            return
++        }
 +        let changed = activatePlayer(bundleID: bundleID, playerID: playerID)
 +        log.info("MRP now-playing player: \(bundleID) player=\(playerID ?? "nil") changed=\(changed)")
 +        requestNowPlayingForLifecycleChange()
@@ -318,7 +347,7 @@
  
          var parsedCommands: Set<MediaCommand>?
          var parsedIntervals: [MediaCommand: Double] = [:]
-@@ -491,10 +652,14 @@
+@@ -491,10 +681,14 @@
          let isPlaying = state.hasPlaybackState && state.playbackState == .playing
  
          if let bundleID {
@@ -337,7 +366,7 @@
              }
          }
  
-@@ -514,15 +679,13 @@
+@@ -514,15 +708,13 @@
          if state.hasPlaybackQueue {
              let shouldApplyQueue: Bool
              if let bundleID {
@@ -355,7 +384,7 @@
                  updateNowPlayingFromContentItems()
                  maybeAutoSkipOpeningContent()
              }
-@@ -531,7 +694,7 @@
+@@ -531,7 +723,7 @@
          if state.hasPlaybackState {
              let shouldApplyPlaybackState: Bool
              if let bundleID {
@@ -364,16 +393,23 @@
              } else {
                  shouldApplyPlaybackState = currentPlayerBundleID == nil
              }
-@@ -539,10 +702,16 @@
+@@ -539,10 +731,23 @@
              guard shouldApplyPlaybackState else { return }
  
              let pbState = state.playbackState
 +            if pbState == .stopped {
-+                // A stopped active player is no longer a valid source of visible
-+                // metadata. Explicit lifecycle messages will retire ownership;
-+                // this is the fallback that immediately retires its snapshot.
-+                clearCurrentPlaybackSnapshot()
++                // Some third-party players use Stopped as a
++                // transient state while seeking or changing playback items. Hide
++                // the visible snapshot, but retain the queue/client long enough
++                // for a subsequent Playing push to recover without needing tvOS
++                // to resend the complete queue. A real teardown is still retired
++                // by RemoveClient/RemovePlayer or the foreground verifier.
++                DispatchQueue.main.async { self.nowPlaying = nil }
 +                return
++            }
++
++            if pbState == .playing, nowPlaying == nil, !contentItems.isEmpty {
++                updateNowPlayingFromContentItems()
 +            }
 +
              DispatchQueue.main.async {
@@ -384,7 +420,7 @@
                      // Snapshot current position before changing rate
                      current.elapsedTime = current.currentPosition
                      current.playbackRate = (pbState == .playing) ? 1 : 0
-@@ -780,7 +949,59 @@
+@@ -780,7 +985,59 @@
          return nil
      }
  
@@ -445,7 +481,7 @@
      private static func firstLengthDelimitedField(number wanted: Int, in data: Data) -> Data? {
          var index = 0
  
-@@ -839,19 +1060,54 @@
+@@ -839,19 +1096,54 @@
  
      // MARK: - Content item updates
  
@@ -502,7 +538,7 @@
              } else {
                  contentItems.append(item)
              }
-@@ -885,11 +1141,16 @@
+@@ -885,11 +1177,16 @@
          msg.type = .playbackQueueRequestMessage
          msg.MRP_playbackQueueRequestMessage = request
  
@@ -521,7 +557,7 @@
          }
      }
  
-@@ -897,7 +1158,13 @@
+@@ -897,7 +1194,13 @@
      private func updateNowPlayingFromContentItems() {
          guard !contentItems.isEmpty else {
              currentContentIdentifier = nil
@@ -536,7 +572,7 @@
              return
          }
  
-@@ -925,7 +1192,13 @@
+@@ -925,7 +1228,13 @@
  
          guard hasContent else {
              currentContentIdentifier = nil

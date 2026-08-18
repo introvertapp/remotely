@@ -90,7 +90,7 @@ struct MiniRemoteView: View {
             miniButton(
                 symbol: "gobackward.10",
                 label: "Rewind 10 Seconds",
-                enabled: state != nil && service.canSkipBackward,
+                enabled: service.isConnected,
                 action: service.rewind10
             )
 
@@ -99,7 +99,7 @@ struct MiniRemoteView: View {
             miniButton(
                 symbol: state?.isPlaying == true ? "pause.fill" : "play.fill",
                 label: state?.isPlaying == true ? "Pause" : "Play",
-                enabled: state != nil,
+                enabled: service.isConnected,
                 glyphSize: 18,
                 action: service.playPause
             )
@@ -109,7 +109,7 @@ struct MiniRemoteView: View {
             miniButton(
                 symbol: "goforward.10",
                 label: "Forward 10 Seconds",
-                enabled: state != nil && service.canSkipForward,
+                enabled: service.isConnected,
                 action: service.forward10
             )
 

@@ -19,7 +19,6 @@ Before publishing a release, verify on macOS that:
 - Now Playing metadata, artwork, seeking, and transport controls update correctly.
 - Switching playback between apps (for example YouTube → Apple TV) immediately discards the previous MRP session and refreshes to the new app without requiring a replay/re-entry action.
 - Dismissing/closing the active Apple TV app immediately clears its Now Playing metadata and transport/seek capabilities; reopening it or opening another media app starts from a fresh Now Playing session.
-- With full Now Playing or MiniRemote visible, Infuse/YouTube/Apple TV state self-corrects within the foreground verification cadence if tvOS misses a push; hiding remotely stops that verification traffic.
 - Apple TV episode title/season/episode metadata remains visible through ads and recap/pre-roll segments for the same playback item.
 - With **Auto-skip tv ads and pre-roll sequences** enabled, newly started supported content jumps once to Apple TV’s published main-content boundary; disabling the preference leaves playback untouched.
 - Apps can be launched and Keyboard Search accepts text when requested by tvOS.
@@ -27,3 +26,7 @@ Before publishing a release, verify on macOS that:
 - The built app installs to `/Applications/remotely.app`, relaunches cleanly, and retains saved preferences/pairing credentials.
 
 - Apple TV episode metadata shows series title, season/episode, and episode title when locally published; generic video sources use their standard creator/artist field as the secondary line (for example a YouTube channel).
+
+- Infuse transient playback transitions (seek, pause/resume, episode changes) do not permanently erase Now Playing; transient stopped/player events recover within the same client, while actually closing Infuse still clears within the teardown verification window.
+
+- While connected, basic playback controls (play/pause and ±10 seconds) remain enabled regardless of whether the active app republishes `SupportedCommands`; unsupported commands may simply no-op on the receiver.

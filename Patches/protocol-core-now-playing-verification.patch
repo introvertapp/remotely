@@ -1,23 +1,44 @@
 --- MRPManager.swift
 +++ MRPManager.swift
-@@ -3,6 +3,7 @@
+@@ -44,6 +44,7 @@
      private var queueLocation: UInt32 = 0
      private var artworkRequestPending = false
      private var playbackQueueRequestGeneration: UInt64 = 0
-+    private var nowPlayingVerificationGeneration: UInt64 = 0
++    private var nowPlayingVerificationPending = false
      private var currentContentIdentifier: String?
      private var artworkUnavailable = false
  
-@@ -21,6 +22,35 @@
+@@ -91,6 +92,7 @@
+                 self?.currentPlayerBundleID = nil
+                 self?.currentPlayerIdentifier = nil
+                 self?.explicitlySelectedBundleID = nil
++                self?.nowPlayingVerificationPending = false
+                 self?.autoSkipOpeningCompletedKeys.removeAll()
+                 self?.autoSkipOpeningPendingKeys.removeAll()
+                 self?.activeAppBundleID = nil
+@@ -135,6 +137,7 @@
+         currentPlayerBundleID = nil
+         currentPlayerIdentifier = nil
+         explicitlySelectedBundleID = nil
++        nowPlayingVerificationPending = false
+         autoSkipOpeningCompletedKeys.removeAll()
+         autoSkipOpeningPendingKeys.removeAll()
+         activeAppBundleID = nil
+@@ -259,6 +262,37 @@
          sendPlaybackQueueRequest()
      }
  
-+    /// Lightweight visible-UI verification. Unlike refreshNowPlaying(), this
-+    /// requests metadata only and deliberately omits artwork dimensions/assets.
-+    /// The request-generation guards reject responses that were superseded by a
-+    /// newer verifier tick or invalidated by a playback-session transition.
-+    public func verifyNowPlaying() {
-+        guard tunnel != nil else { return }
++    /// Lightweight foreground verification used only to detect an inactive
++    /// playback session that failed to publish its normal teardown event.
++    ///
++    /// This deliberately does not feed a healthy response through handleSetState:
++    /// third-party apps can return partial/ambiguous queue snapshots to explicit
++    /// requests, and treating those snapshots as authoritative could erase
++    /// otherwise-valid artwork, timeline and transport state. Normal MRP pushes
++    /// and explicit one-shot refreshes remain the only paths that populate or
++    /// replace active playback metadata.
++    public func verifyNowPlayingTeardown() {
++        guard tunnel != nil, !nowPlayingVerificationPending else { return }
 +
 +        var request = MRP_PlaybackQueueRequestMessage()
 +        request.location = 0
@@ -29,18 +50,64 @@
 +        msg.type = .playbackQueueRequestMessage
 +        msg.MRP_playbackQueueRequestMessage = request
 +
-+        nowPlayingVerificationGeneration &+= 1
-+        let verificationGeneration = nowPlayingVerificationGeneration
-+        let sessionGeneration = playbackQueueRequestGeneration
++        nowPlayingVerificationPending = true
 +        sendAndReceive(&msg) { [weak self] response in
-+            guard let self,
-+                  self.nowPlayingVerificationGeneration == verificationGeneration,
-+                  self.playbackQueueRequestGeneration == sessionGeneration,
-+                  let response, response.hasMRP_setStateMessage else { return }
-+            self.handleSetState(response)
++            guard let self else { return }
++            self.nowPlayingVerificationPending = false
++            guard let response, response.hasMRP_setStateMessage else { return }
++            self.handleNowPlayingTeardownVerification(response.MRP_setStateMessage)
 +        }
 +    }
 +
      public func seekToPosition(_ position: Double) {
          var options = MRP_CommandOptions()
          options.playbackPosition = position
+@@ -575,6 +609,48 @@
+         }
+     }
+ 
++    /// Apply only a conclusive idle result from the periodic verifier. A
++    /// non-empty/playing response is intentionally ignored so polling can never
++    /// replace a healthy third-party queue.
++    private func handleNowPlayingTeardownVerification(_ state: MRP_SetStateMessage) {
++        let bundleID = bundleIdentifier(from: state)
++        let playerID = playerIdentifier(from: state)
++
++        if let bundleID, currentPlayerBundleID != nil,
++           !currentOwnerMatches(bundleID: bundleID, playerID: playerID) {
++            return
++        }
++
++        // An explicit Playing state outranks a temporarily empty queue response.
++        if state.hasPlaybackState && state.playbackState == .playing { return }
++
++        let reportsStopped = state.hasPlaybackState && state.playbackState == .stopped
++        let reportsEmptyQueue = state.hasPlaybackQueue && state.playbackQueue.contentItems.isEmpty
++        guard reportsStopped || reportsEmptyQueue else { return }
++
++        log.info("MRP verifier confirmed inactive Now Playing session")
++        clearVerifiedInactivePlayback()
++    }
++
++    private func clearVerifiedInactivePlayback() {
++        let retiredBundleID = currentPlayerBundleID
++        clearCurrentPlaybackSnapshot()
++
++        if let retiredBundleID {
++            commandsByBundleID.removeValue(forKey: retiredBundleID)
++            skipIntervalsByBundleID.removeValue(forKey: retiredBundleID)
++        }
++        currentPlayerBundleID = nil
++        currentPlayerIdentifier = nil
++        explicitlySelectedBundleID = nil
++
++        DispatchQueue.main.async {
++            self.activeAppBundleID = nil
++            self.supportedCommands = []
++            self.preferredSkipIntervals = [:]
++        }
++    }
++
+     // MARK: - Explicit MRP now-playing lifecycle
+ 
+     private func handleSetNowPlayingClient(_ message: MRP_ProtocolMessage) {
