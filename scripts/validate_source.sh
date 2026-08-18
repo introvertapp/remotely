@@ -38,8 +38,8 @@ grep -q 'static let keyboardPanelHeight: CGFloat = 770' Sources/remotely/AppCons
 grep -q 'static let cornerRadius: CGFloat = 34' Sources/remotely/AppConstants.swift || fail "corner radius changed"
 grep -q 'static let longPressSeconds: Double = 0.65' Sources/remotely/AppConstants.swift || fail "long press threshold changed"
 grep -q '<string>remotely</string>' Resources/Info.plist || fail "remotely bundle name missing"
-grep -q '<string>1.2.10</string>' Resources/Info.plist || fail "v1.2.10 bundle version missing"
-awk '/<key>CFBundleVersion<\/key>/{getline; if ($0 ~ /<string>17<\/string>/) found=1} END{exit found ? 0 : 1}' Resources/Info.plist || fail "v1.2.10 build number 17 missing"
+grep -q '<string>1.2.9</string>' Resources/Info.plist || fail "v1.2.9 bundle version missing"
+awk '/<key>CFBundleVersion<\/key>/{getline; if ($0 ~ /<string>16<\/string>/) found=1} END{exit found ? 0 : 1}' Resources/Info.plist || fail "v1.2.9 build number 16 missing"
 grep -q 'PROTOCOL_CORE_REF="052d9a9a0416d577119316ea813aa3b822b408e5"' "$SCRIPT_DIR/build.sh" || fail "pinned protocol-core revision missing"
 grep -q '<key>CFBundleIconFile</key>' Resources/Info.plist || fail "app icon declaration missing"
 grep -q '<key>LSUIElement</key>' Resources/Info.plist || fail "LSUIElement missing"
@@ -71,22 +71,16 @@ grep -q 'explicitlySelectedBundleID == bundleID || currentPlayerBundleID == bund
 grep -q 'if !removeClient, let playerID' Patches/protocol-core-session-lifecycle.patch || fail "RemovePlayer active-player identity guard missing"
 grep -q 'Some third-party players use Stopped as a' Patches/protocol-core-session-lifecycle.patch || fail "transient stopped queue-retention correction missing"
 grep -q 'if pbState == .playing, nowPlaying == nil, !contentItems.isEmpty' Patches/protocol-core-session-lifecycle.patch || fail "retained queue resume path missing"
-# v1.2.10 preserves the visible two-second stale-card correction while scoping
-# verifier teardown replies to the exact playback snapshot/revision that sent them.
+# v1.2.5 preserves the two-second stale-card correction without allowing
+# periodic queue requests to overwrite healthy third-party playback state.
 grep -q 'protocol-core-now-playing-verification.patch' "$SCRIPT_DIR/build.sh" || fail "teardown-only Now Playing verification patch integration missing"
 [[ -f Patches/protocol-core-now-playing-verification.patch ]] || fail "teardown-only Now Playing verification patch missing"
 grep -q 'public func verifyNowPlayingTeardown()' Patches/protocol-core-now-playing-verification.patch || fail "teardown-only core verifier API missing"
 grep -q 'nowPlayingVerificationPending' Patches/protocol-core-now-playing-verification.patch || fail "single-flight verifier guard missing"
-grep -q 'private struct NowPlayingVerificationSnapshot: Equatable' Patches/protocol-core-now-playing-verification.patch || fail "verifier snapshot identity missing"
-grep -q 'sessionGeneration: playbackQueueRequestGeneration' Patches/protocol-core-now-playing-verification.patch || fail "verifier session-generation capture missing"
-grep -q 'stateRevision: nowPlayingVerificationRevision' Patches/protocol-core-now-playing-verification.patch || fail "verifier state-revision capture missing"
-grep -q 'guard self.currentNowPlayingVerificationSnapshot() == snapshot else' Patches/protocol-core-now-playing-verification.patch || fail "stale verifier response rejection missing"
-grep -q 'state.playbackState != .stopped' Patches/protocol-core-now-playing-verification.patch || fail "verifier non-stopped playback protection missing"
-grep -q 'guard reportsStopped || reportsEmptyQueue else {' Patches/protocol-core-now-playing-verification.patch || fail "verifier is not restricted to stopped/empty playback"
-grep -q 'nowPlayingTeardownCandidate == snapshot' Patches/protocol-core-now-playing-verification.patch || fail "identity-poor teardown confirmation missing"
-[[ "$(grep -c 'noteNowPlayingStateAdvanced()' Patches/protocol-core-now-playing-verification.patch)" -ge 5 ]] || fail "authoritative-state verifier invalidation hooks missing"
+grep -q 'guard reportsStopped || reportsEmptyQueue else { return }' Patches/protocol-core-now-playing-verification.patch || fail "verifier is not restricted to stopped/empty playback"
+grep -q 'state.playbackState == .playing { return }' Patches/protocol-core-now-playing-verification.patch || fail "verifier playing-state protection missing"
 grep -q 'request.returnContentItemAssetsInUserCompletion = false' Patches/protocol-core-now-playing-verification.patch || fail "verifier must suppress content-item assets"
-! sed -n '/public func verifyNowPlayingTeardown()/,/public func seekToPosition/p' Patches/protocol-core-now-playing-verification.patch | grep -q 'handleSetState(response)' || fail "teardown verifier still routes healthy responses through SetState"
+! grep -A35 'public func verifyNowPlayingTeardown()' Patches/protocol-core-now-playing-verification.patch | grep -q 'handleSetState(response)' || fail "teardown verifier still routes healthy responses through SetState"
 grep -A28 'private func clearVerifiedInactivePlayback()' Patches/protocol-core-now-playing-verification.patch | grep -q 'commandsByBundleID.removeValue' || fail "verified teardown must retire stale per-client command cache"
 grep -A28 'private func clearVerifiedInactivePlayback()' Patches/protocol-core-now-playing-verification.patch | grep -q 'skipIntervalsByBundleID.removeValue' || fail "verified teardown must retire stale per-client skip interval cache"
 grep -q 'RemoveClient is authoritative for the lifetime of that client' Patches/protocol-core-session-lifecycle.patch || fail "confirmed RemoveClient cache retirement missing"
@@ -219,7 +213,7 @@ grep -q 'symbol: "goforward.10"' Sources/remotely/RemoteView.swift || fail "forw
 grep -q 'parseCombinedTVTitle' Sources/remotely/AppleTVService.swift || fail "local TV metadata parsing missing"
 grep -q 'cleanedMediaSegment' Sources/remotely/AppleTVService.swift || fail "robust TV metadata segment parsing missing"
 grep -q 'parsed.episodeTitle ?? cleanSecondary' Sources/remotely/AppleTVService.swift || fail "TV secondary-metadata fallback missing"
-grep -q '\[^A-Za-z0-9\]{0,6}' Sources/remotely/AppleTVService.swift || fail "separator-tolerant season/episode parsing missing"
+grep -q '\[\^A-Za-z0-9\]{0,6}' Sources/remotely/AppleTVService.swift || fail "separator-tolerant season/episode parsing missing"
 grep -q '\.padding(12)' Sources/remotely/RemoteView.swift || fail "MiniRemote-style Now Playing padding missing"
 grep -q 'HStack(alignment: .top, spacing: 12)' Sources/remotely/RemoteView.swift || fail "MiniRemote-style Now Playing artwork gutter missing"
 if grep -q 'volumeEstimate' Sources/remotely/AppleTVService.swift; then fail "removed volume estimation code still present"; fi
@@ -603,6 +597,7 @@ grep -Fq -- '-p codeSign' "$SCRIPT_DIR/setup_signing.sh" || fail "local trust is
 ! grep -Fq -- '-r trustAsRoot' "$SCRIPT_DIR/setup_signing.sh" || fail "invalid trustAsRoot fallback remains"
 grep -Fq 'Found incomplete remotely signing identity; repairing Code Signing trust...' "$SCRIPT_DIR/setup_signing.sh" || fail "failed-setup signing identity repair path missing"
 echo "signing transport / root-trust / quiet checkout invariants: PASS"
+
 # configurable presentation + exclusive MiniRemote invariants.
 grep -q 'static let allowPanelDragging = "allowPanelDragging"' Sources/remotely/AppModel.swift || fail "main-panel drag preference key missing"
 grep -q 'panel.isMovableByWindowBackground = false' Sources/remotely/AppController.swift || fail "background window dragging must remain disabled"
@@ -645,7 +640,7 @@ grep -q 'speaker.wave.1.fill' Sources/remotely/MiniRemoteView.swift || fail "Min
 grep -q 'gobackward.10' Sources/remotely/MiniRemoteView.swift || fail "MiniRemote rewind control missing"
 grep -q 'goforward.10' Sources/remotely/MiniRemoteView.swift || fail "MiniRemote forward control missing"
 grep -q 'play.fill' Sources/remotely/MiniRemoteView.swift || fail "MiniRemote play/pause control missing"
-grep -q '<string>1.2.10</string>' Resources/Info.plist || fail "v1.2.10 bundle version missing"
+grep -q '<string>1.2.9</string>' Resources/Info.plist || fail "v1.2.9 bundle version missing"
 echo "configurable presentation / login item / exclusive MiniRemote invariants: PASS"
 # MiniRemote layout: timeline labels must not clip and controls remain
 # vertically separated from the timeline.
@@ -729,5 +724,5 @@ grep -q '.frame(width: AppConstants.panelContentWidth, height: 190)' Sources/rem
 grep -q '.frame(width: 82, height: 166)' Sources/remotely/RemoteView.swift || fail "full Remote Now Playing artwork does not match MiniRemote geometry"
 grep -q 'frame(minWidth: 52, alignment: .trailing)' Sources/remotely/NowPlayingShared.swift || fail "hour-long remaining-time field can regress to wrapping"
 grep -q '.fixedSize(horizontal: true, vertical: false)' Sources/remotely/NowPlayingShared.swift || fail "timeline time labels are not forced to one line"
-grep -q '<string>1.2.10</string>' Resources/Info.plist || fail "v1.2.10 bundle version missing"
+grep -q '<string>1.2.9</string>' Resources/Info.plist || fail "v1.2.9 bundle version missing"
 echo "top-edge dragging / shared Now Playing invariants: PASS"
