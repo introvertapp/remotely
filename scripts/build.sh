@@ -558,7 +558,12 @@ RUNTIME_MANIFEST
   fi
   grep -q 'public func verifyNowPlayingTeardown()' "$mrp_manager" || { echo "Core teardown-only Now Playing verifier missing after patch." >&2; exit 1; }
   grep -q 'private var nowPlayingVerificationPending = false' "$mrp_manager" || { echo "Core verifier single-flight guard missing after patch." >&2; exit 1; }
-  grep -q 'self.handleNowPlayingTeardownVerification(response.MRP_setStateMessage)' "$mrp_manager" || { echo "Core verifier response gate missing after patch." >&2; exit 1; }
+  grep -q 'private var nowPlayingVerificationGeneration: UInt64 = 0' "$mrp_manager" || { echo "Core verifier request-generation guard missing after patch." >&2; exit 1; }
+  grep -q 'let sessionGeneration = playbackQueueRequestGeneration' "$mrp_manager" || { echo "Core verifier playback-session generation capture missing after patch." >&2; exit 1; }
+  grep -q 'self.playbackQueueRequestGeneration == sessionGeneration' "$mrp_manager" || { echo "Core verifier stale-session response rejection missing after patch." >&2; exit 1; }
+  grep -q 'self.currentPlayerBundleID == sessionBundleID' "$mrp_manager" || { echo "Core verifier bundle ownership guard missing after patch." >&2; exit 1; }
+  grep -q 'self.currentPlayerIdentifier == sessionPlayerID' "$mrp_manager" || { echo "Core verifier player ownership guard missing after patch." >&2; exit 1; }
+  grep -q 'self.handleNowPlayingTeardownVerification(' "$mrp_manager" || { echo "Core verifier response gate missing after patch." >&2; exit 1; }
   grep -q 'guard reportsStopped || reportsEmptyQueue else { return }' "$mrp_manager" || { echo "Core verifier is not restricted to conclusive teardown state." >&2; exit 1; }
   grep -q 'if state.hasPlaybackState && state.playbackState == .playing { return }' "$mrp_manager" || { echo "Core verifier lacks playing-state protection." >&2; exit 1; }
   grep -q 'request.returnContentItemAssetsInUserCompletion = false' "$mrp_manager" || { echo "Core verifier still requests content-item assets." >&2; exit 1; }
@@ -738,7 +743,7 @@ install_and_launch() {
 
 print_summary() {
   echo
-  echo "remotely v1.2.9 built, signed, installed, and launched successfully."
+  echo "remotely v1.2.10 built, signed, installed, and launched successfully."
   echo "Installed app: /Applications/remotely.app"
   echo "Build log:     $LOG_FILE"
 }

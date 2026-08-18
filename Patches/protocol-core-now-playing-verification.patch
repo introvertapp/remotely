@@ -1,30 +1,33 @@
 --- MRPManager.swift
 +++ MRPManager.swift
-@@ -44,6 +44,7 @@
+@@ -44,6 +44,8 @@
      private var queueLocation: UInt32 = 0
      private var artworkRequestPending = false
      private var playbackQueueRequestGeneration: UInt64 = 0
 +    private var nowPlayingVerificationPending = false
++    private var nowPlayingVerificationGeneration: UInt64 = 0
      private var currentContentIdentifier: String?
      private var artworkUnavailable = false
  
-@@ -91,6 +92,7 @@
+@@ -91,6 +93,8 @@
                  self?.currentPlayerBundleID = nil
                  self?.currentPlayerIdentifier = nil
                  self?.explicitlySelectedBundleID = nil
++                self?.nowPlayingVerificationGeneration &+= 1
 +                self?.nowPlayingVerificationPending = false
                  self?.autoSkipOpeningCompletedKeys.removeAll()
                  self?.autoSkipOpeningPendingKeys.removeAll()
                  self?.activeAppBundleID = nil
-@@ -135,6 +137,7 @@
+@@ -135,6 +139,8 @@
          currentPlayerBundleID = nil
          currentPlayerIdentifier = nil
          explicitlySelectedBundleID = nil
++        nowPlayingVerificationGeneration &+= 1
 +        nowPlayingVerificationPending = false
          autoSkipOpeningCompletedKeys.removeAll()
          autoSkipOpeningPendingKeys.removeAll()
          activeAppBundleID = nil
-@@ -259,6 +262,37 @@
+@@ -259,6 +265,55 @@
          sendPlaybackQueueRequest()
      }
  
@@ -50,33 +53,58 @@
 +        msg.type = .playbackQueueRequestMessage
 +        msg.MRP_playbackQueueRequestMessage = request
 +
++        // Bind this probe to the exact playback session that existed when it
++        // was sent. A client/player switch invalidates playbackQueueRequestGeneration,
++        // so a delayed teardown reply from the previous app can never clear the
++        // newer session. The verifier generation separately prevents a callback
++        // from an invalidated connection/probe from changing current pending state.
++        nowPlayingVerificationGeneration &+= 1
++        let verificationGeneration = nowPlayingVerificationGeneration
++        let sessionGeneration = playbackQueueRequestGeneration
++        let sessionBundleID = currentPlayerBundleID
++        let sessionPlayerID = currentPlayerIdentifier
 +        nowPlayingVerificationPending = true
 +        sendAndReceive(&msg) { [weak self] response in
 +            guard let self else { return }
++            guard self.nowPlayingVerificationGeneration == verificationGeneration else { return }
 +            self.nowPlayingVerificationPending = false
++            guard self.playbackQueueRequestGeneration == sessionGeneration,
++                  self.currentPlayerBundleID == sessionBundleID,
++                  self.currentPlayerIdentifier == sessionPlayerID else { return }
 +            guard let response, response.hasMRP_setStateMessage else { return }
-+            self.handleNowPlayingTeardownVerification(response.MRP_setStateMessage)
++            self.handleNowPlayingTeardownVerification(
++                response.MRP_setStateMessage,
++                expectedBundleID: sessionBundleID,
++                expectedPlayerID: sessionPlayerID
++            )
 +        }
 +    }
 +
      public func seekToPosition(_ position: Double) {
          var options = MRP_CommandOptions()
          options.playbackPosition = position
-@@ -575,6 +609,48 @@
+@@ -575,6 +630,55 @@
          }
      }
  
 +    /// Apply only a conclusive idle result from the periodic verifier. A
 +    /// non-empty/playing response is intentionally ignored so polling can never
 +    /// replace a healthy third-party queue.
-+    private func handleNowPlayingTeardownVerification(_ state: MRP_SetStateMessage) {
++    private func handleNowPlayingTeardownVerification(
++        _ state: MRP_SetStateMessage,
++        expectedBundleID: String?,
++        expectedPlayerID: String?
++    ) {
 +        let bundleID = bundleIdentifier(from: state)
 +        let playerID = playerIdentifier(from: state)
 +
-+        if let bundleID, currentPlayerBundleID != nil,
-+           !currentOwnerMatches(bundleID: bundleID, playerID: playerID) {
-+            return
-+        }
++        // Some explicit queue replies omit player identity entirely, including
++        // the inactive/empty result used to detect an app close. Accept that
++        // identity-poor result only because the callback above has already
++        // proven the local playback session is unchanged. When tvOS does supply
++        // identity, it must agree with the session that originated this probe.
++        if let expectedBundleID, let bundleID, bundleID != expectedBundleID { return }
++        if let expectedPlayerID, let playerID, playerID != expectedPlayerID { return }
 +
 +        // An explicit Playing state outranks a temporarily empty queue response.
 +        if state.hasPlaybackState && state.playbackState == .playing { return }
