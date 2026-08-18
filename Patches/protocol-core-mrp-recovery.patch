@@ -1,0 +1,101 @@
+--- AppleTVManager.swift
++++ AppleTVManager.swift
+@@ -3,6 +3,8 @@
+     private var sentText = ""
+     private var pendingCompanionCommands: [() -> Void] = []
+     private var mrpRetryCount = 0
++    private var mrpReconnectScheduled = false
++    private var mrpConnectionGeneration: UInt64 = 0
+     private static let maxMRPRetries = 3
+     private var isReconnecting = false
+     private var companionRetryCount = 0
+@@ -23,6 +25,8 @@
+     }
+ 
+     private func disconnect(clearPendingCommands: Bool) {
++        mrpConnectionGeneration &+= 1
++        mrpReconnectScheduled = false
+         connection?.stopTextInput()
+         mrpManager.disconnect()
+         connection?.disconnect()
+@@ -62,6 +66,44 @@
+         }
+     }
+ 
++    private func scheduleMRPReconnect(for generation: UInt64) {
++        guard generation == mrpConnectionGeneration,
++              connectedDevice != nil,
++              currentCredentials != nil,
++              !mrpReconnectScheduled else { return }
++
++        // Preserve the existing three quick recovery attempts, then keep trying
++        // with bounded backoff instead of dropping the remembered device/session.
++        // This also lets a suspended Mac or temporarily unavailable Apple TV
++        // recover passively after wake/network restoration.
++        let nextRetry = min(mrpRetryCount + 1, Self.maxMRPRetries + 4)
++        mrpRetryCount = nextRetry
++
++        let delay: TimeInterval
++        if nextRetry <= Self.maxMRPRetries {
++            delay = 1
++        } else {
++            switch nextRetry - Self.maxMRPRetries {
++            case 1: delay = 5
++            case 2: delay = 10
++            case 3: delay = 20
++            default: delay = 30
++            }
++        }
++
++        mrpReconnectScheduled = true
++        log.info("MRP tunnel lost — retrying in \(Int(delay))s (retry \(nextRetry))")
++        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
++            guard let self,
++                  self.mrpConnectionGeneration == generation else { return }
++
++            self.mrpReconnectScheduled = false
++            guard self.connectedDevice != nil,
++                  self.currentCredentials != nil else { return }
++            self.startMRPViaTunnel()
++        }
++    }
++
+     private func startMRPViaTunnel() {
+         guard !mrpManager.isConnected else { return }
+         guard let device = connectedDevice, !device.host.isEmpty, let creds = currentCredentials else {
+@@ -73,26 +115,17 @@
+         let airplayPort: UInt16 = 7000
+         let attempt = mrpRetryCount + 1
+         log.info("Starting MRP via AirPlay tunnel: \(device.host):\(airplayPort) (attempt \(attempt))")
+-        mrpManager.onDisconnect = { [weak self] error in
+-            guard let self else { return }
+-            if self.connectionStatus == .connected {
+-                if self.mrpRetryCount < Self.maxMRPRetries {
+-                    self.mrpRetryCount += 1
+-                    log.info("MRP tunnel lost — retrying (\(self.mrpRetryCount)/\(Self.maxMRPRetries))")
+-                    DispatchQueue.global().asyncAfter(deadline: .now() + 1) { [weak self] in
+-                        self?.startMRPViaTunnel()
+-                    }
+-                } else {
+-                    log.info("MRP tunnel lost — max retries reached, disconnecting")
+-                    self.mrpRetryCount = 0
+-                    self.connectionStatus = .disconnected
+-                    self.connectedDeviceName = nil
+-                    self.connectedDevice = nil
+-                }
+-            }
++        let generation = mrpConnectionGeneration
++        mrpManager.onDisconnect = { [weak self] _ in
++            guard let self,
++                  self.mrpConnectionGeneration == generation else { return }
++            self.scheduleMRPReconnect(for: generation)
+         }
+         mrpManager.onReady = { [weak self] in
+-            self?.mrpRetryCount = 0
++            guard let self,
++                  self.mrpConnectionGeneration == generation else { return }
++            self.mrpRetryCount = 0
++            self.mrpReconnectScheduled = false
+         }
+         mrpManager.onKeyboardFocusChange = { [weak self] focused in
+             DispatchQueue.main.async {

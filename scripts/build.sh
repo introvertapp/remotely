@@ -613,6 +613,27 @@ RUNTIME_MANIFEST
   grep -q 'self?.sentText = result.currentText' "$apple_tv_manager" || { echo "Core text-session state synchronization missing after patch." >&2; exit 1; }
   report_progress 88
 
+  # v1.2.12 keeps MRP recovery alive after the initial three quick retries.
+  # A generation token invalidates delayed work after an explicit disconnect or
+  # device switch, while bounded backoff allows passive recovery after temporary
+  # network loss or Mac sleep without discarding the active Apple TV identity.
+  local mrp_recovery_patch="$ROOT_DIR/Patches/protocol-core-mrp-recovery.patch"
+  if [[ ! -f "$mrp_recovery_patch" ]]; then
+    echo "MRP recovery patch is missing; refusing to continue." >&2
+    exit 1
+  fi
+  echo "Applying persistent MRP recovery correction..."
+  if ! patch -d "$(dirname "$apple_tv_manager")" -p0 --forward --batch < "$mrp_recovery_patch"; then
+    echo "Protocol core changed and the MRP recovery patch no longer applies cleanly; refusing to guess." >&2
+    exit 1
+  fi
+  grep -q 'private var mrpConnectionGeneration: UInt64 = 0' "$apple_tv_manager" || { echo "Core MRP recovery generation guard missing after patch." >&2; exit 1; }
+  grep -q 'private var mrpReconnectScheduled = false' "$apple_tv_manager" || { echo "Core MRP single-flight reconnect guard missing after patch." >&2; exit 1; }
+  grep -q 'private func scheduleMRPReconnect(for generation: UInt64)' "$apple_tv_manager" || { echo "Core persistent MRP recovery scheduler missing after patch." >&2; exit 1; }
+  grep -q 'self.mrpConnectionGeneration == generation' "$apple_tv_manager" || { echo "Core stale MRP reconnect rejection missing after patch." >&2; exit 1; }
+  grep -q 'default: delay = 30' "$apple_tv_manager" || { echo "Core MRP reconnect backoff cap missing after patch." >&2; exit 1; }
+  report_progress 89
+
   grep -q 'public var installedApps:' "$apple_tv_manager" || { echo "Core lacks installedApps support." >&2; exit 1; }
   grep -q 'public func fetchApps()' "$apple_tv_manager" || { echo "Core lacks fetchApps support." >&2; exit 1; }
   grep -q 'public func launchApp(bundleID: String)' "$apple_tv_manager" || { echo "Core lacks launchApp support." >&2; exit 1; }
