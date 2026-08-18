@@ -1,0 +1,20 @@
+--- AppleTVManager.swift
++++ AppleTVManager.swift
+@@ -1,7 +1,6 @@
+         connectionStatus = .connecting
+         self.connectedDevice = device
+         self.connectedDeviceName = device.name
+-        LastConnectedDeviceStorage.save(device)
+ 
+         let conn = CompanionConnection()
+         self.connection = conn
+@@ -16,6 +15,9 @@
+                     guard !didProceed else { return }
+                     didProceed = true
+                     self?.connectionStatus = .connected
++                    if let device = self?.connectedDevice {
++                        LastConnectedDeviceStorage.save(device)
++                    }
+                     self?.discovery.pause()
+                     self?.flushPendingCompanionCommands()
+                     self?.fetchApps()

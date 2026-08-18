@@ -65,6 +65,7 @@ final class AppleTVService: ObservableObject {
     private var remotePresented = false
     private var miniRemotePresented = false
     private var isShuttingDown = false
+    private var startupReconnectDeviceID: String?
     private let defaults = UserDefaults.standard
 
     private enum KeychainService {
@@ -77,18 +78,18 @@ final class AppleTVService: ObservableObject {
     }
 
     init() {
-        selectedDeviceID = defaults.string(forKey: DefaultsKey.selectedID)
+        let persistedSelectedDeviceID = defaults.string(forKey: DefaultsKey.selectedID)
+        selectedDeviceID = persistedSelectedDeviceID
         selectedDeviceName = defaults.string(forKey: DefaultsKey.selectedName) ?? "Choose Apple TV"
         connectedDeviceID = nil
         connectedDeviceName = nil
+        startupReconnectDeviceID = persistedSelectedDeviceID
 
         manager.startScanning()
 
-        // Core persists the last successfully connected Apple TV. Reconnect only
-        // when this app has a selected device from a previous native-app run.
-        if selectedDeviceID != nil {
-            _ = manager.connectToLastConnectedDevice()
-        }
+        // Reconnect the exact device this app last confirmed as connected. The
+        // Bonjour snapshot may not exist yet at init time, so refreshManagerSnapshot
+        // consumes this one-shot target as soon as that device is discovered.
 
         // The protocol core is Observation-based. Track its actual state
         // changes instead of rebuilding every app snapshot five times per
@@ -209,6 +210,7 @@ final class AppleTVService: ObservableObject {
         guard !selectedDeviceIsConnected else { return }
         selectedDeviceName = device.name
         statusText = "Connecting to \(device.name)…"
+        startupReconnectDeviceID = nil
         manager.connect(to: device)
     }
 
@@ -235,6 +237,7 @@ final class AppleTVService: ObservableObject {
         guard !alreadyConnected else { return }
 
         statusText = "Connecting to \(device.name)…"
+        startupReconnectDeviceID = nil
         manager.connect(to: device)
     }
 
@@ -249,6 +252,7 @@ final class AppleTVService: ObservableObject {
         guard !selectedDeviceIsPaired else { return }
         selectedDeviceName = device.name
         statusText = "Starting pairing with \(device.name)…"
+        startupReconnectDeviceID = nil
         manager.connect(to: device)
     }
 
@@ -603,6 +607,13 @@ final class AppleTVService: ObservableObject {
         deviceMap = map
         if devices != summaries {
             devices = summaries
+        }
+
+        if let startupReconnectDeviceID,
+           let device = map[startupReconnectDeviceID] {
+            self.startupReconnectDeviceID = nil
+            statusText = "Connecting to \(device.name)…"
+            manager.connect(to: device)
         }
 
         // Remote-card switching is intentionally limited to Apple TVs that

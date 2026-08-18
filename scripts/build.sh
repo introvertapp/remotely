@@ -634,6 +634,25 @@ RUNTIME_MANIFEST
   grep -q 'default: delay = 30' "$apple_tv_manager" || { echo "Core MRP reconnect backoff cap missing after patch." >&2; exit 1; }
   report_progress 89
 
+  # v1.2.13 makes the core's remembered Apple TV mean successfully connected,
+  # matching remotely's persisted selection. Failed connection/pairing attempts
+  # must not replace the device used for later reconnects.
+  local device_persistence_patch="$ROOT_DIR/Patches/protocol-core-device-persistence.patch"
+  if [[ ! -f "$device_persistence_patch" ]]; then
+    echo "Successful-device persistence patch is missing; refusing to continue." >&2
+    exit 1
+  fi
+  echo "Applying successful-device persistence correction..."
+  if ! patch -d "$(dirname "$apple_tv_manager")" -p0 --forward --batch < "$device_persistence_patch"; then
+    echo "Protocol core changed and the successful-device persistence patch no longer applies cleanly; refusing to guess." >&2
+    exit 1
+  fi
+  if sed -n '/private func connect(to device: AppleTVDevice, preservingPendingCommands: Bool)/,/let conn = CompanionConnection()/p' "$apple_tv_manager" | grep -q 'LastConnectedDeviceStorage.save'; then
+    echo "Core still persists an Apple TV before connection succeeds." >&2
+    exit 1
+  fi
+  sed -n '/let proceed: () -> Void =/,/self?.fetchApps()/p' "$apple_tv_manager" | grep -Fq 'LastConnectedDeviceStorage.save(device)' || { echo "Core successful-session device persistence missing after patch." >&2; exit 1; }
+
   grep -q 'public var installedApps:' "$apple_tv_manager" || { echo "Core lacks installedApps support." >&2; exit 1; }
   grep -q 'public func fetchApps()' "$apple_tv_manager" || { echo "Core lacks fetchApps support." >&2; exit 1; }
   grep -q 'public func launchApp(bundleID: String)' "$apple_tv_manager" || { echo "Core lacks launchApp support." >&2; exit 1; }
