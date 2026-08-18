@@ -542,10 +542,11 @@ RUNTIME_MANIFEST
   grep -q 'if pbState == .playing, nowPlaying == nil, !contentItems.isEmpty' "$mrp_manager" || { echo "Core retained-queue resume path missing." >&2; exit 1; }
   report_progress 76
 
-  # v1.2.5 retains the two-second visible-UI stale-session check as teardown-only.
-  # Healthy/partial responses must never flow through normal SetState processing,
-  # and only one verifier request may be outstanding. Basic transport UI does not
-  # depend on per-client SupportedCommands advertising.
+  # v1.2.10 retains the visible-UI stale-session check as teardown-only while
+  # scoping every verifier response to the exact playback snapshot/revision that
+  # issued it. Identity-poor stopped/empty replies require confirmation before
+  # clearing, preserving app-close cleanup without allowing stale replies to erase
+  # a newer active Now Playing session.
   local now_playing_verification_patch="$ROOT_DIR/Patches/protocol-core-now-playing-verification.patch"
   if [[ ! -f "$now_playing_verification_patch" ]]; then
     echo "MRP teardown-only Now Playing verification patch is missing; refusing to continue." >&2
@@ -558,11 +559,13 @@ RUNTIME_MANIFEST
   fi
   grep -q 'public func verifyNowPlayingTeardown()' "$mrp_manager" || { echo "Core teardown-only Now Playing verifier missing after patch." >&2; exit 1; }
   grep -q 'private var nowPlayingVerificationPending = false' "$mrp_manager" || { echo "Core verifier single-flight guard missing after patch." >&2; exit 1; }
-  grep -q 'self.handleNowPlayingTeardownVerification(response.MRP_setStateMessage)' "$mrp_manager" || { echo "Core verifier response gate missing after patch." >&2; exit 1; }
-  grep -q 'guard reportsStopped || reportsEmptyQueue else { return }' "$mrp_manager" || { echo "Core verifier is not restricted to conclusive teardown state." >&2; exit 1; }
-  grep -q 'if state.hasPlaybackState && state.playbackState == .playing { return }' "$mrp_manager" || { echo "Core verifier lacks playing-state protection." >&2; exit 1; }
+  grep -q 'private struct NowPlayingVerificationSnapshot: Equatable' "$mrp_manager" || { echo "Core verifier snapshot identity missing after patch." >&2; exit 1; }
+  grep -q 'stateRevision: nowPlayingVerificationRevision' "$mrp_manager" || { echo "Core verifier state-revision capture missing after patch." >&2; exit 1; }
+  grep -q 'guard self.currentNowPlayingVerificationSnapshot() == snapshot else' "$mrp_manager" || { echo "Core stale verifier-response rejection missing after patch." >&2; exit 1; }
+  grep -q 'state.playbackState != .stopped' "$mrp_manager" || { echo "Core verifier lacks explicit live-state protection." >&2; exit 1; }
+  grep -q 'nowPlayingTeardownCandidate == snapshot' "$mrp_manager" || { echo "Core verifier inactive-state confirmation guard missing after patch." >&2; exit 1; }
   grep -q 'request.returnContentItemAssetsInUserCompletion = false' "$mrp_manager" || { echo "Core verifier still requests content-item assets." >&2; exit 1; }
-  ! grep -A35 'public func verifyNowPlayingTeardown()' "$mrp_manager" | grep -q 'handleSetState(response)' || { echo "Core teardown verifier still mutates healthy SetState/queue state." >&2; exit 1; }
+  ! sed -n '/public func verifyNowPlayingTeardown()/,/public func seekToPosition/p' "$mrp_manager" | grep -q 'handleSetState(response)' || { echo "Core teardown verifier still mutates healthy SetState/queue state." >&2; exit 1; }
   report_progress 82
 
   # Native MRP exposes standard transport senders directly. remotely intentionally
@@ -738,7 +741,7 @@ install_and_launch() {
 
 print_summary() {
   echo
-  echo "remotely v1.2.9 built, signed, installed, and launched successfully."
+  echo "remotely v1.2.10 built, signed, installed, and launched successfully."
   echo "Installed app: /Applications/remotely.app"
   echo "Build log:     $LOG_FILE"
 }

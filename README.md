@@ -10,60 +10,21 @@
   >
 </p>
 
-<p align="center">
-  <img src="docs/images/remote.png" alt="remote" width="225"/>
-  <img src="docs/images/search.png" alt="remote search" width="225"/>
-  <img src="docs/images/apps.png" alt="apps launcher" width="225"/>
-  <img src="docs/images/preferences.png" alt="preferences" width="225"/>
-</p>
-
-<p align="center">
-  <img src="docs/images/mini-remote.png" alt="MiniRemote" width="560"/>
-</p>
-
 ## Features
 
 - Full Apple TV remote with clickpad, navigation, playback, volume, and power controls
-- Now Playing artwork and normalized local metadata (show/season/episode, episode title, or creator/channel), with explicit MRP session switching, same-item metadata retention through Apple TV pre-roll, and a teardown-only visible-UI stale-session check that cannot replace healthy playback state, plus seekable timeline and always-available basic playback controls including ±10 second skipping
+- Now Playing artwork and normalized local metadata, explicit MRP session switching, same-item metadata retention, teardown-only stale-session cleanup, seekable timeline, and standard transport controls
 - MiniRemote for a compact always-available control surface
 - Optional **Auto-skip tv ads and pre-roll sequences** using Apple TV’s published main-content boundary
 - Launch installed Apple TV apps directly from macOS
 - Keyboard Search when Apple TV requests text input
 - Discover, pair, and switch between multiple Apple TVs
-- Optional always-on-top mode, launch at login, and remembered window position
-
-## Requirements
-
-- macOS 14 Sonoma or later
-- Xcode or the Xcode Command Line Tools with Swift available
-- An Apple TV on the same local network
-- Internet access during the first build to fetch pinned source dependencies
+- Optional always-on-top mode and launch at login
 
 ## Build
-
-From the project directory, run:
 
 ```zsh
 ./scripts/build.sh
 ```
 
-The build script validates the source, fetches the pinned dependencies, builds and signs `remotely.app`, installs it in `/Applications`, and launches it.
-
-On the first build, macOS may ask for permission to create/trust the local code-signing identity or to install the app.
-
-### Other scripts
-
-All maintenance scripts live in `scripts/`:
-
-```text
-scripts/validate_source.sh  Validate source/build invariants
-scripts/clean.sh            Remove local build output
-scripts/install.sh          Install an already-built app
-scripts/setup_signing.sh    Prepare the persistent local signing identity
-```
-
-## Notes
-
-remotely communicates directly with Apple TV over the local network. Pairing credentials are stored in the macOS Keychain.
-
-Third-party components and notices are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+The build validates source, fetches pinned dependencies, builds, signs, installs to `/Applications`, and launches remotely.
