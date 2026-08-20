@@ -11,6 +11,7 @@ enum AppConstants {
     static let miniRemoteWidth: CGFloat = 360
     static let panelContentWidth: CGFloat = panelWidth - 24
     static let windowDragHandleHeight: CGFloat = 12
+    static let navigationBarHeight: CGFloat = 50
     static let miniRemoteHeight: CGFloat = 190
     static let panelGap: CGFloat = 1
     static let cornerRadius: CGFloat = 34

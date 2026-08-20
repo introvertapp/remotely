@@ -117,6 +117,11 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
             self.updatePanelGeometry()
         }
 
+        model.onNavigationButtonsChanged = { [weak self] _ in
+            guard let self, self.panelPresented else { return }
+            self.updatePanelGeometry()
+        }
+
         model.onMiniRemoteModeChanged = { [weak self] _ in
             guard let self else { return }
             self.updateMiniRemoteMenuState()
@@ -474,12 +479,19 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private var desiredPanelHeight: CGFloat {
-        guard model.mode == .remote else { return AppConstants.panelHeight }
-        if presentingMiniRemote { return AppConstants.miniRemoteHeight }
-        return AppConstants.remotePanelHeight(
-            showNowPlaying: model.showNowPlaying,
-            keyboardVisible: remoteService.keyboardInputRequested
-        )
+        let contentHeight: CGFloat
+        if model.mode != .remote {
+            contentHeight = AppConstants.panelHeight
+        } else if presentingMiniRemote {
+            contentHeight = AppConstants.miniRemoteHeight
+        } else {
+            contentHeight = AppConstants.remotePanelHeight(
+                showNowPlaying: model.showNowPlaying,
+                keyboardVisible: remoteService.keyboardInputRequested
+            )
+        }
+
+        return contentHeight + (model.showNavigationButtons ? AppConstants.navigationBarHeight : 0)
     }
 
     private func updatePanelGeometry() {

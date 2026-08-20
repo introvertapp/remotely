@@ -12,6 +12,7 @@ final class AppModel: ObservableObject {
     private enum DefaultsKey {
         static let allowPanelDragging = "allowPanelDragging"
         static let showNowPlaying = "showNowPlaying"
+        static let showNavigationButtons = "showNavigationButtons"
         static let useMiniRemote = "useMiniRemote"
         static let alwaysOnTop = "alwaysOnTop"
         static let autoSkipOpeningContent = "autoSkipOpeningContent"
@@ -38,6 +39,14 @@ final class AppModel: ObservableObject {
             guard showNowPlaying != oldValue else { return }
             defaults.set(showNowPlaying, forKey: DefaultsKey.showNowPlaying)
             onShowNowPlayingChanged?(showNowPlaying)
+        }
+    }
+
+    @Published var showNavigationButtons: Bool {
+        didSet {
+            guard showNavigationButtons != oldValue else { return }
+            defaults.set(showNavigationButtons, forKey: DefaultsKey.showNavigationButtons)
+            onNavigationButtonsChanged?(showNavigationButtons)
         }
     }
 
@@ -76,6 +85,7 @@ final class AppModel: ObservableObject {
     var onModeChanged: ((PanelMode) -> Void)?
     var onPanelDraggingChanged: ((Bool) -> Void)?
     var onShowNowPlayingChanged: ((Bool) -> Void)?
+    var onNavigationButtonsChanged: ((Bool) -> Void)?
     var onMiniRemoteModeChanged: ((Bool) -> Void)?
     var onAlwaysOnTopChanged: ((Bool) -> Void)?
 
@@ -95,6 +105,9 @@ final class AppModel: ObservableObject {
         } else {
             showNowPlaying = defaults.bool(forKey: DefaultsKey.showNowPlaying)
         }
+
+        // In-panel navigation is intentionally opt-in for existing and new installations.
+        showNavigationButtons = defaults.bool(forKey: DefaultsKey.showNavigationButtons)
 
         if defaults.object(forKey: DefaultsKey.useMiniRemote) != nil {
             useMiniRemote = defaults.bool(forKey: DefaultsKey.useMiniRemote)

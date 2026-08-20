@@ -65,27 +65,56 @@ struct PanelRootView: View {
     }
 
     private var preferredPanelWidth: CGFloat {
-        presentingMiniRemote ? AppConstants.miniRemoteWidth : AppConstants.panelWidth
+        panelWidth(for: displayedMode)
     }
 
     private var preferredPanelHeight: CGFloat {
-        guard displayedMode == .remote else { return AppConstants.panelHeight }
-        if presentingMiniRemote { return AppConstants.miniRemoteHeight }
-        return AppConstants.remotePanelHeight(
-            showNowPlaying: model.showNowPlaying,
-            keyboardVisible: remote.keyboardInputRequested
-        )
+        panelHeight(for: displayedMode)
     }
 
     private var preferredCornerRadius: CGFloat {
         presentingMiniRemote ? AppConstants.miniRemoteCornerRadius : AppConstants.cornerRadius
     }
 
+    private var navigationHeight: CGFloat {
+        model.showNavigationButtons ? AppConstants.navigationBarHeight : 0
+    }
+
+    private func panelWidth(for mode: PanelMode) -> CGFloat {
+        mode == .remote && shouldUseMiniRemote ? AppConstants.miniRemoteWidth : AppConstants.panelWidth
+    }
+
+    private func contentHeight(for mode: PanelMode) -> CGFloat {
+        guard mode == .remote else { return AppConstants.panelHeight }
+        if shouldUseMiniRemote { return AppConstants.miniRemoteHeight }
+        return AppConstants.remotePanelHeight(
+            showNowPlaying: model.showNowPlaying,
+            keyboardVisible: remote.keyboardInputRequested
+        )
+    }
+
+    private func panelHeight(for mode: PanelMode) -> CGFloat {
+        contentHeight(for: mode) + navigationHeight
+    }
+
     @ViewBuilder
     private func faceLayer(for mode: PanelMode, visible: Bool) -> some View {
         let interactive = visible && !isFlipping
 
-        panelFace(for: mode, interactive: interactive)
+        VStack(spacing: 0) {
+            if model.showNavigationButtons {
+                PanelNavigationBar(selectedMode: mode) { selectedMode in
+                    model.mode = selectedMode
+                }
+                .frame(width: AppConstants.panelContentWidth, height: 32)
+                .padding(.top, 14)
+                .padding(.bottom, 4)
+            }
+
+            panelFace(for: mode, interactive: interactive)
+        }
+            .frame(width: panelWidth(for: mode), height: panelHeight(for: mode), alignment: .top)
+            .background(AppConstants.remoteBackground)
             // A tiny non-zero opacity keeps the hidden destination renderable so
             // AppKit/SwiftUI can prepare its backing content before the flip.
             // It remains visually imperceptible and cannot receive input.
@@ -179,5 +208,59 @@ struct PanelRootView: View {
                 }
             }
         }
+    }
+}
+
+private struct PanelNavigationBar: View {
+    let selectedMode: PanelMode
+    let onSelect: (PanelMode) -> Void
+
+    var body: some View {
+        HStack(spacing: 0) {
+            navigationButton("Remote", mode: .remote)
+            separator
+            navigationButton("Apps", mode: .apps)
+            separator
+            navigationButton("Preferences", mode: .preferences)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(AppConstants.controlBackground)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(AppConstants.controlBorder, lineWidth: 0.8)
+                }
+        }
+    }
+
+    private var separator: some View {
+        Text("|")
+            .font(.system(size: 12, weight: .regular))
+            .foregroundStyle(Color.white.opacity(0.26))
+            .accessibilityHidden(true)
+    }
+
+    private func navigationButton(_ title: String, mode: PanelMode) -> some View {
+        Button {
+            guard mode != selectedMode else { return }
+            onSelect(mode)
+        } label: {
+            Text(title)
+                .font(.system(size: 12, weight: mode == selectedMode ? .semibold : .regular))
+                .foregroundStyle(mode == selectedMode ? Color.white : Color.white.opacity(0.58))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(PanelNavigationButtonStyle())
+        .accessibilityLabel(title)
+        .accessibilityValue(mode == selectedMode ? "Selected" : "")
+    }
+}
+
+private struct PanelNavigationButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .opacity(configuration.isPressed ? 0.62 : 1)
     }
 }
