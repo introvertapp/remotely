@@ -38,8 +38,8 @@ grep -q 'static let keyboardPanelHeight: CGFloat = 770' Sources/remotely/AppCons
 grep -q 'static let cornerRadius: CGFloat = 34' Sources/remotely/AppConstants.swift || fail "corner radius changed"
 grep -q 'static let longPressSeconds: Double = 0.65' Sources/remotely/AppConstants.swift || fail "long press threshold changed"
 grep -q '<string>remotely</string>' Resources/Info.plist || fail "remotely bundle name missing"
-grep -q '<string>1.2.13</string>' Resources/Info.plist || fail "v1.2.13 bundle version missing"
-awk '/<key>CFBundleVersion<\/key>/{getline; if ($0 ~ /<string>20<\/string>/) found=1} END{exit found ? 0 : 1}' Resources/Info.plist || fail "v1.2.13 build number 20 missing"
+grep -q '<string>1.3.0</string>' Resources/Info.plist || fail "v1.3.0 bundle version missing"
+awk '/<key>CFBundleVersion<\/key>/{getline; if ($0 ~ /<string>21<\/string>/) found=1} END{exit found ? 0 : 1}' Resources/Info.plist || fail "v1.3.0 build number 21 missing"
 grep -q 'PROTOCOL_CORE_REF="052d9a9a0416d577119316ea813aa3b822b408e5"' "$SCRIPT_DIR/build.sh" || fail "pinned protocol-core revision missing"
 grep -q '<key>CFBundleIconFile</key>' Resources/Info.plist || fail "app icon declaration missing"
 grep -q '<key>LSUIElement</key>' Resources/Info.plist || fail "LSUIElement missing"
@@ -662,7 +662,7 @@ grep -q 'speaker.wave.1.fill' Sources/remotely/MiniRemoteView.swift || fail "Min
 grep -q 'gobackward.10' Sources/remotely/MiniRemoteView.swift || fail "MiniRemote rewind control missing"
 grep -q 'goforward.10' Sources/remotely/MiniRemoteView.swift || fail "MiniRemote forward control missing"
 grep -q 'play.fill' Sources/remotely/MiniRemoteView.swift || fail "MiniRemote play/pause control missing"
-grep -q '<string>1.2.13</string>' Resources/Info.plist || fail "v1.2.13 bundle version missing"
+grep -q '<string>1.3.0</string>' Resources/Info.plist || fail "v1.3.0 bundle version missing"
 echo "configurable presentation / login item / exclusive MiniRemote invariants: PASS"
 # MiniRemote layout: timeline labels must not clip and controls remain
 # vertically separated from the timeline.
@@ -746,5 +746,5 @@ grep -q '.frame(width: AppConstants.panelContentWidth, height: 190)' Sources/rem
 grep -q '.frame(width: 82, height: 166)' Sources/remotely/RemoteView.swift || fail "full Remote Now Playing artwork does not match MiniRemote geometry"
 grep -q 'frame(minWidth: 52, alignment: .trailing)' Sources/remotely/NowPlayingShared.swift || fail "hour-long remaining-time field can regress to wrapping"
 grep -q '.fixedSize(horizontal: true, vertical: false)' Sources/remotely/NowPlayingShared.swift || fail "timeline time labels are not forced to one line"
-grep -q '<string>1.2.13</string>' Resources/Info.plist || fail "v1.2.13 bundle version missing"
+grep -q '<string>1.3.0</string>' Resources/Info.plist || fail "v1.3.0 bundle version missing"
 echo "top-edge dragging / shared Now Playing invariants: PASS"
