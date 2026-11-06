@@ -1,0 +1,31 @@
+Installing remotely
+===================
+
+Requires macOS 14 Sonoma or later and an Apple TV on the same local network.
+
+Choose macos-arm64 for an Apple Silicon Mac (M1 or later).
+Choose macos-x86_64 for an Intel Mac.
+Apple menu > About This Mac shows which kind of Mac you have.
+
+1. Quit an existing copy of remotely using its menu-bar menu.
+2. Open the DMG and drag remotely.app to Applications. Eject the disk image.
+   If you downloaded the ZIP instead, expand it and move remotely.app to Applications.
+3. Open remotely from Applications.
+4. These builds are not Developer ID signed or notarized. If macOS blocks the
+   first launch, open System Settings > Privacy & Security and choose Open Anyway
+   for remotely, then confirm Open. This is an app-specific exception.
+5. Allow local-network access if macOS asks. Use remotely's menu-bar icon to
+   open Preferences, discover your Apple TV, and pair using the PIN on your TV.
+
+Updates
+-------
+Quit remotely, replace the app in Applications, and open the new copy.
+Preferences and the pairing credential namespace are preserved. Because these
+builds use ad-hoc signatures, macOS may request Keychain access again after an
+update or when switching from a source-built copy. If a saved pairing cannot
+be used, remove that pairing in Preferences and pair the Apple TV again.
+There is no automatic updater.
+
+Downloads and source: https://github.com/introvertapp/remotely
+Apple's first-launch instructions: https://support.apple.com/102445
+Dependency notices: remotely.app/Contents/Resources/THIRD_PARTY_NOTICES.md

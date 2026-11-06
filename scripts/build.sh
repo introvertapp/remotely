@@ -8,16 +8,23 @@ cd "$ROOT_DIR"
 PROTOCOL_CORE_REF="052d9a9a0416d577119316ea813aa3b822b408e5"
 PROTOCOL_CORE_URL="https://github.com/nickustinov/itsytv-core.git"
 SWIFT_PROTOBUF_TAG="1.31.0"
+SWIFT_PROTOBUF_REF="e3f69fd321d0c9fcdc16fb576a0cdd956675face"
 SIGNING_IDENTITY_NAME="${REMOTELY_SIGNING_IDENTITY:-remotely Local Signing}"
 VENDOR_DIR="$ROOT_DIR/Vendor"
 CORE_DIR="$VENDOR_DIR/ProtocolCore"
 PROTOBUF_DIR="$VENDOR_DIR/swift-protobuf"
 APP="$ROOT_DIR/dist/remotely.app"
-LOG_DIR="$HOME/Library/Logs/remotely"
+LOG_DIR="${REMOTELY_LOG_DIR:-$HOME/Library/Logs/remotely}"
 LOG_FILE="$LOG_DIR/build.log"
 BAR_WIDTH=24
 LABEL_WIDTH=22
 SELF_TEST_PROGRESS=false
+PREPARE_ONLY=false
+case "${1:-}" in
+  --prepare-only) PREPARE_ONLY=true ;;
+  --self-test-progress|"") ;;
+  *) echo "Usage: $0 [--prepare-only|--self-test-progress]" >&2; exit 2 ;;
+esac
 if [[ "${1:-}" == "--self-test-progress" ]]; then
   SELF_TEST_PROGRESS=true
   LOG_FILE="${TMPDIR:-/tmp}/remotely-build-progress-selftest-$$.log"
@@ -347,6 +354,10 @@ prepare_vendor_sources() {
   if [[ ! -d "$PROTOBUF_DIR/.git" ]] || [[ "$(git -C "$PROTOBUF_DIR" describe --tags --exact-match 2>/dev/null || true)" != "$SWIFT_PROTOBUF_TAG" ]]; then
     echo "Fetching SwiftProtobuf $SWIFT_PROTOBUF_TAG source..."
     clone_exact_tag "https://github.com/apple/swift-protobuf.git" "$SWIFT_PROTOBUF_TAG" "$PROTOBUF_DIR"
+  fi
+  if [[ "$(git -C "$PROTOBUF_DIR" rev-parse HEAD)" != "$SWIFT_PROTOBUF_REF" ]]; then
+    echo "SwiftProtobuf tag does not match its reviewed commit; refusing to continue." >&2
+    exit 1
   fi
   report_progress 50
 
@@ -680,13 +691,13 @@ RUNTIME_MANIFEST
 fetch_external_dependencies() {
   prepare_vendor_sources
   report_progress 92
-  swift package resolve
+  swift package --force-resolved-versions resolve
   report_progress 99
 }
 
 build_release_app() {
   report_progress 2
-  swift build -c release 2>&1 | swift_build_progress_filter
+  swift build -c release --force-resolved-versions 2>&1 | swift_build_progress_filter
   report_progress 87
 
   local bin_dir
@@ -706,6 +717,7 @@ build_release_app() {
   report_progress 96
   cp "$ROOT_DIR/Resources/Info.plist" "$APP/Contents/Info.plist"
   cp "$ROOT_DIR/Resources/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
+  "$SCRIPT_DIR/bundle_resources.sh" "$APP" "$bin_dir"
   report_progress 99
 }
 
@@ -783,7 +795,7 @@ install_and_launch() {
 
 print_summary() {
   echo
-  echo "remotely v1.2.11 built, signed, installed, and launched successfully."
+  echo "remotely v$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist") built, signed, installed, and launched successfully."
   echo "Installed app: /Applications/remotely.app"
   echo "Build log:     $LOG_FILE"
 }
@@ -810,6 +822,14 @@ if [[ "$SELF_TEST_PROGRESS" == true ]]; then
   run_step 5 self_test_progress_step
   show_cursor
   rm -f "$LOG_FILE"
+  exit 0
+fi
+
+if [[ "$PREPARE_ONLY" == true ]]; then
+  # Release packaging reuses the reviewed dependency preparation without
+  # creating a signing identity, installing, or launching an application.
+  "$SCRIPT_DIR/validate_source.sh"
+  fetch_external_dependencies
   exit 0
 fi
 
