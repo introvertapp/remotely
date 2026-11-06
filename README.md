@@ -35,11 +35,35 @@
 ## Requirements
 
 - macOS 14 Sonoma or later
-- Xcode or the Xcode Command Line Tools with Swift available
 - An Apple TV on the same local network
-- Internet access during the first build to fetch pinned source dependencies
 
-## Build
+## Download and install
+
+Download remotely from [GitHub Releases](https://github.com/introvertapp/remotely/releases/latest):
+
+| Your Mac | Download |
+| --- | --- |
+| Apple Silicon (M1 or later) | `remotely-<version>-macos-arm64.dmg` |
+| Intel | `remotely-<version>-macos-x86_64.dmg` |
+
+Open the DMG, drag remotely to Applications, eject the disk image, and open the
+app. ZIP downloads are also available; expand the ZIP and move remotely.app to
+Applications. No developer tools are needed.
+
+These builds are ad-hoc signed and are not Developer ID signed or notarized.
+If macOS blocks the first launch, attempt to open the app, then choose
+**System Settings → Privacy & Security → Open Anyway** for remotely and confirm
+Open. See [Apple's instructions](https://support.apple.com/102445).
+
+Allow local-network access if asked. Use the menu-bar icon to open Preferences
+and pair your Apple TV. To update, quit remotely and replace the app in
+Applications. macOS may request Keychain access again; if pairing cannot be
+reused, remove it in Preferences and pair again. There is no automatic updater.
+
+## Build from source
+
+Developers need Xcode with Swift 6.1 or later and internet access to fetch the
+pinned dependencies. To build, install, and launch a local development copy:
 
 From the project directory, run:
 
@@ -60,7 +84,13 @@ scripts/validate_source.sh  Validate source/build invariants
 scripts/clean.sh            Remove local build output
 scripts/install.sh          Install an already-built app
 scripts/setup_signing.sh    Prepare the persistent local signing identity
+scripts/release.sh          Build separate ARM and Intel DMG/ZIP downloads
+scripts/validate_release.sh Verify packaged apps, disk images, and checksums
+scripts/publish_release.sh  Upload verified downloads to a draft GitHub Release
 ```
+
+The release build is independent of local signing and installation. See
+[RELEASING.md](docs/RELEASING.md) for the build, verification, and publishing steps.
 
 ## Notes
 

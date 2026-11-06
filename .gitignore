@@ -9,7 +9,6 @@ Thumbs.db
 # Swift Package Manager
 .build/
 .swiftpm/
-Package.resolved
 
 # Generated build/dependency output
 Vendor/

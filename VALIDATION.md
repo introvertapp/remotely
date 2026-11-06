@@ -8,7 +8,20 @@ Run:
 ./scripts/validate_source.sh
 ```
 
-For a release build, `./scripts/build.sh` runs the same validation automatically before fetching dependencies or compiling.
+Both the local development build (`./scripts/build.sh`) and downloadable release
+build (`./scripts/release.sh`) run this validation before fetching dependencies.
+Version checks read the bundle metadata instead of pinning a particular release.
+
+Verify actual downloads using:
+
+```sh
+./scripts/validate_release.sh dist/releases/<VERSION>
+```
+
+This checks ZIP extraction, DMG mounting, exact architecture, macOS 14 deployment
+target, signatures, dependency resources and notices, checksums, and command-line
+version smoke tests. See [docs/RELEASING.md](docs/RELEASING.md) for the full release
+checklist. These checks do not replace Apple TV or macOS compatibility testing.
 
 ## Manual release checks
 

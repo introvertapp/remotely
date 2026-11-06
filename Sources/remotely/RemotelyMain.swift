@@ -4,6 +4,13 @@ import AppKit
 enum RemotelyMain {
     @MainActor
     static func main() {
+        // Allow release verification without opening UI or connecting to a TV.
+        if CommandLine.arguments.dropFirst().contains("--version") {
+            let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown"
+            let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
+            print("remotely \(version) (\(build))")
+            return
+        }
         let app = NSApplication.shared
         let controller = AppController()
         app.delegate = controller
