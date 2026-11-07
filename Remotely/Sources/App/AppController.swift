@@ -222,7 +222,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func buildStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         guard let button = statusItem.button else { return }
-        button.image = makeRemoteIcon()
+        button.image = makeTouchpadIcon()
         button.target = self
         button.action = #selector(statusItemClicked(_:))
         button.sendAction(on: [.leftMouseDown, .rightMouseUp])
@@ -571,24 +571,44 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
         return NSPoint(x: x.rounded(), y: y.rounded())
     }
 
-    private func makeRemoteIcon() -> NSImage {
+    private func makeTouchpadIcon() -> NSImage {
         let image = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { _ in
-            NSColor.black.setStroke()
-            NSColor.black.setFill()
+            guard let context = NSGraphicsContext.current?.cgContext else { return false }
 
-            let body = NSBezierPath(
-                roundedRect: NSRect(x: 5, y: 1, width: 8, height: 16),
-                xRadius: 2.6,
-                yRadius: 2.6
+            let touchpad = CGMutablePath()
+            touchpad.addRoundedRect(
+                in: CGRect(x: 1, y: 1, width: 16, height: 16),
+                cornerWidth: 4,
+                cornerHeight: 4
             )
-            body.lineWidth = 1.4
-            body.stroke()
 
-            let clickpad = NSBezierPath(ovalIn: NSRect(x: 7, y: 10.2, width: 4, height: 4))
-            clickpad.lineWidth = 1.2
-            clickpad.stroke()
+            let chevron = CGMutablePath()
+            chevron.move(to: CGPoint(x: -2, y: 4))
+            chevron.addLine(to: CGPoint(x: 0, y: 6))
+            chevron.addLine(to: CGPoint(x: 2, y: 4))
 
-            NSBezierPath(ovalIn: NSRect(x: 8.1, y: 4.2, width: 1.8, height: 1.8)).fill()
+            // Isolate the clear strokes so they only cut out the icon itself.
+            context.beginTransparencyLayer(auxiliaryInfo: nil)
+            context.setFillColor(NSColor.black.cgColor)
+            context.addPath(touchpad)
+            context.fillPath()
+
+            context.setBlendMode(.clear)
+            context.setLineWidth(1.5)
+            context.setLineCap(.round)
+            context.setLineJoin(.round)
+
+            // Rotate one chevron around the center to create four matching cutouts.
+            let chevrons = CGMutablePath()
+            for quarterTurn in 0..<4 {
+                let transform = CGAffineTransform(translationX: 9, y: 9)
+                    .rotated(by: CGFloat(quarterTurn) * .pi / 2)
+                chevrons.addPath(chevron, transform: transform)
+            }
+
+            context.addPath(chevrons)
+            context.strokePath()
+            context.endTransparencyLayer()
             return true
         }
         image.isTemplate = true
