@@ -3,6 +3,8 @@ import os.log
 import SwiftProtobuf
 
 private let log = CoreLog(category: "MRP")
+private let autoSkipLog = Logger(subsystem: "com.local.remotely", category: "AutoSkip")
+private let diagnoseAutoSkip = ProcessInfo.processInfo.arguments.contains("--diagnose-auto-skip")
 
 /// Orchestrates the MRP protocol lifecycle: connect via AirPlay tunnel, subscribe
 /// to now-playing updates, and send media commands.
@@ -42,6 +44,7 @@ public final class MRPManager {
     /// Playback queue content items and current location (from setStateMessage)
     private var contentItems: [MRP_ContentItem] = []
     private var queueLocation: UInt32 = 0
+    private var currentPlaybackState: MRP_PlaybackState.Enum?
     private var artworkRequestPending = false
     private var playbackQueueRequestGeneration: UInt64 = 0
     private var nowPlayingVerificationPending = false
@@ -93,6 +96,7 @@ public final class MRPManager {
                 self?.currentPlayerBundleID = nil
                 self?.currentPlayerIdentifier = nil
                 self?.explicitlySelectedBundleID = nil
+                self?.currentPlaybackState = nil
                 self?.nowPlayingVerificationGeneration &+= 1
                 self?.nowPlayingVerificationPending = false
                 self?.autoSkipOpeningCompletedKeys.removeAll()
@@ -127,6 +131,7 @@ public final class MRPManager {
         responseLock.unlock()
         contentItems = []
         queueLocation = 0
+        currentPlaybackState = nil
         artworkRequestPending = false
         playbackQueueRequestGeneration &+= 1
         artworkUnavailable = false
@@ -542,13 +547,17 @@ public final class MRPManager {
     private func clearCurrentPlaybackSnapshot() {
         contentItems = []
         queueLocation = 0
+        currentPlaybackState = nil
         artworkRequestPending = false
         playbackQueueRequestGeneration &+= 1
         artworkUnavailable = false
-        currentContentIdentifier = nil
         autoSkipOpeningCompletedKeys.removeAll()
         autoSkipOpeningPendingKeys.removeAll()
+        clearDisplayedNowPlaying()
+    }
 
+    private func clearDisplayedNowPlaying() {
+        currentContentIdentifier = nil
         DispatchQueue.main.async {
             self.nowPlaying = nil
             self.nowPlayingSeriesName = nil
@@ -809,44 +818,33 @@ public final class MRPManager {
             }
         }
 
-        if state.hasPlaybackQueue {
-            let shouldApplyQueue: Bool
-            if let bundleID {
-                shouldApplyQueue = currentOwnerMatches(bundleID: bundleID, playerID: playerID)
-            } else {
-                shouldApplyQueue = currentPlayerBundleID == nil
-            }
-
-            if shouldApplyQueue {
-                applyPlaybackQueue(state.playbackQueue)
-                updateNowPlayingFromContentItems()
-                maybeAutoSkipOpeningContent()
-            }
-        }
+        let ownsPlayback = bundleID.map { currentOwnerMatches(bundleID: $0, playerID: playerID) }
+            ?? (currentPlayerBundleID == nil)
+        guard ownsPlayback else { return }
 
         if state.hasPlaybackState {
-            let shouldApplyPlaybackState: Bool
-            if let bundleID {
-                shouldApplyPlaybackState = currentOwnerMatches(bundleID: bundleID, playerID: playerID)
-            } else {
-                shouldApplyPlaybackState = currentPlayerBundleID == nil
-            }
+            currentPlaybackState = state.playbackState
+        }
+        if state.hasPlaybackQueue {
+            applyPlaybackQueue(state.playbackQueue)
+        }
 
-            guard shouldApplyPlaybackState else { return }
+        if currentPlaybackState == .stopped {
+            // Keep the queue so transient stops can recover on the next Playing
+            // event. Metadata updates alone must not make a stopped item visible.
+            clearDisplayedNowPlaying()
+            return
+        }
 
+        if state.hasPlaybackQueue {
+            updateNowPlayingFromContentItems()
+            maybeAutoSkipOpeningContent()
+        }
+        if state.hasPlaybackState {
             let pbState = state.playbackState
-            if pbState == .stopped {
-                // Some third-party players use Stopped as a
-                // transient state while seeking or changing playback items. Hide
-                // the visible snapshot, but retain the queue/client long enough
-                // for a subsequent Playing push to recover without needing tvOS
-                // to resend the complete queue. A real teardown is still retired
-                // by RemoveClient/RemovePlayer or the foreground verifier.
-                DispatchQueue.main.async { self.nowPlaying = nil }
-                return
-            }
-
-            if pbState == .playing, nowPlaying == nil, !contentItems.isEmpty {
+            if !state.hasPlaybackQueue,
+               pbState == .playing || pbState == .paused,
+               nowPlaying == nil, !contentItems.isEmpty {
                 updateNowPlayingFromContentItems()
             }
 
@@ -872,22 +870,33 @@ public final class MRPManager {
     /// does not try to classify advertisements, recaps, logos, or other opening
     /// segments; Apple owns that segmentation and supplies the final boundary.
     private func maybeAutoSkipOpeningContent() {
-        guard autoSkipOpeningContentEnabled, !contentItems.isEmpty else { return }
+        guard autoSkipOpeningContentEnabled, currentPlaybackState != .stopped,
+              !contentItems.isEmpty else { return }
 
         let location = min(Int(queueLocation), contentItems.count - 1)
         let item = contentItems[location]
         guard item.hasMetadata else { return }
 
         let metadata = item.metadata
-        guard let target = mainContentStartTime(from: metadata),
+        guard let target = Self.mainContentStartTime(from: metadata),
               target.isFinite,
-              target > 1 else { return }
+              target > 1 else {
+            if diagnoseAutoSkip {
+                autoSkipLog.notice("Playback item has no usable main-content marker.")
+            }
+            return
+        }
 
         let position = metadata.hasElapsedTime ? metadata.elapsedTime : 0
         guard position.isFinite,
               position >= 0,
               position <= 10,
-              position + 0.75 < target else { return }
+              position + 0.75 < target else {
+            if diagnoseAutoSkip {
+                autoSkipLog.notice("Main-content marker at \(target, privacy: .public)s, outside the opening window at \(position, privacy: .public)s.")
+            }
+            return
+        }
 
         let key: String
         if item.hasIdentifier, !item.identifier.isEmpty {
@@ -913,6 +922,7 @@ public final class MRPManager {
             self.autoSkipOpeningPendingKeys.remove(key)
 
             guard self.autoSkipOpeningContentEnabled,
+                  self.currentPlaybackState != .stopped,
                   !self.contentItems.isEmpty else { return }
 
             let currentLocation = min(Int(self.queueLocation), self.contentItems.count - 1)
@@ -930,7 +940,7 @@ public final class MRPManager {
             }
 
             guard currentKey == key,
-                  let currentTarget = self.mainContentStartTime(from: currentMetadata),
+                  let currentTarget = Self.mainContentStartTime(from: currentMetadata),
                   currentTarget.isFinite,
                   currentTarget > 1 else { return }
 
@@ -941,18 +951,21 @@ public final class MRPManager {
                   currentPosition + 0.75 < currentTarget else { return }
 
             self.autoSkipOpeningCompletedKeys.insert(key)
-            log.info("MRP auto-skip opening content: \(currentPosition)s -> \(currentTarget)s")
+            if diagnoseAutoSkip {
+                autoSkipLog.notice("Sending opening-content seek from \(currentPosition, privacy: .public)s to \(currentTarget, privacy: .public)s.")
+            }
             self.seekToPosition(currentTarget)
         }
     }
 
-    /// The pinned protocol schema predates ContentItemMetadata field 67
-    /// (`nowPlayingInfoData`). SwiftProtobuf preserves unknown fields, so
-    /// serialize the message and recover that one length-delimited field from
-    /// the wire representation before decoding its NSKeyedArchiver plist.
-    private func mainContentStartTime(from metadata: MRP_ContentItemMetadata) -> Double? {
-        guard let root = Self.nowPlayingInfoArchive(from: metadata) else { return nil }
-        return Self.findMainContentStartTime(in: root)
+    /// Field 67 is unknown to the generated schema. Same-item updates append
+    /// unknown fields, so the first archive can predate the opening marker.
+    static func mainContentStartTime(from metadata: MRP_ContentItemMetadata) -> Double? {
+        lengthDelimitedFields(number: 67, in: metadata.unknownFields.data)
+            .reversed()
+            .lazy
+            .compactMap { findMainContentStartTime(in: decodeNowPlayingInfoArchive($0)) }
+            .first
     }
 
     private struct SupplementalMediaMetadata {
@@ -999,12 +1012,12 @@ public final class MRPManager {
     }
 
     private static func nowPlayingInfoArchive(from metadata: MRP_ContentItemMetadata) -> Any? {
-        guard let serialized = try? metadata.serializedData(),
-              let archive = firstLengthDelimitedField(number: 67, in: serialized),
-              archive.starts(with: Data("bplist00".utf8)) else {
-            return nil
-        }
+        guard let archive = firstLengthDelimitedField(number: 67, in: metadata.unknownFields.data) else { return nil }
+        return decodeNowPlayingInfoArchive(archive)
+    }
 
+    private static func decodeNowPlayingInfoArchive(_ archive: Data) -> Any? {
+        guard archive.starts(with: Data("bplist00".utf8)) else { return nil }
         return try? NSKeyedUnarchiver.unarchiveTopLevelObjectWithData(archive)
     }
 
@@ -1143,42 +1156,46 @@ public final class MRPManager {
     /// Minimal protobuf wire reader used for preserved private metadata and
     /// lifecycle extensions absent from the pinned generated protocol schema.
     private static func firstLengthDelimitedField(number wanted: Int, in data: Data) -> Data? {
+        lengthDelimitedFields(number: wanted, in: data, limit: 1).first
+    }
+
+    private static func lengthDelimitedFields(number wanted: Int, in data: Data, limit: Int = .max) -> [Data] {
         var index = 0
+        var fields: [Data] = []
 
         while index < data.count {
-            guard let tag = readVarint(data, index: &index) else { return nil }
+            guard let tag = readVarint(data, index: &index) else { break }
             let fieldNumber = Int(tag >> 3)
             let wireType = Int(tag & 0x07)
 
             switch wireType {
             case 0:
-                guard readVarint(data, index: &index) != nil else { return nil }
+                guard readVarint(data, index: &index) != nil else { return fields }
 
             case 1:
-                guard index + 8 <= data.count else { return nil }
+                guard index + 8 <= data.count else { return fields }
                 index += 8
 
             case 2:
                 guard let rawLength = readVarint(data, index: &index),
-                      rawLength <= UInt64(Int.max) else { return nil }
+                      rawLength <= UInt64(data.count - index) else { return fields }
                 let length = Int(rawLength)
-                guard index + length <= data.count else { return nil }
-                let payload = data.subdata(in: index..<(index + length))
-                index += length
                 if fieldNumber == wanted {
-                    return payload
+                    fields.append(data.subdata(in: index..<(index + length)))
+                    if fields.count == limit { return fields }
                 }
+                index += length
 
             case 5:
-                guard index + 4 <= data.count else { return nil }
+                guard index + 4 <= data.count else { return fields }
                 index += 4
 
             default:
-                return nil
+                return fields
             }
         }
 
-        return nil
+        return fields
     }
 
     private static func readVarint(_ data: Data, index: inout Int) -> UInt64? {
@@ -1244,15 +1261,18 @@ public final class MRPManager {
             return
         }
 
+        var updatedQueue = false
         for item in update.contentItems {
-            if item.hasIdentifier,
-               let idx = contentItems.firstIndex(where: { $0.hasIdentifier && $0.identifier == item.identifier }) {
-                contentItems[idx] = mergedContentItem(item, with: contentItems[idx])
-            } else {
-                contentItems.append(item)
-            }
+            guard item.hasIdentifier, !item.identifier.isEmpty,
+                  let idx = contentItems.firstIndex(where: { $0.hasIdentifier && $0.identifier == item.identifier })
+            else { continue }
+            contentItems[idx] = mergedContentItem(item, with: contentItems[idx])
+            updatedQueue = true
         }
 
+        // An item update describes an existing queue entry. A late push can
+        // arrive after the queue was cleared or its player was removed.
+        guard updatedQueue else { return }
         updateNowPlayingFromContentItems()
         maybeAutoSkipOpeningContent()
     }
@@ -1295,22 +1315,18 @@ public final class MRPManager {
 
     /// Build NowPlayingState from the current content item in the playback queue.
     private func updateNowPlayingFromContentItems() {
-        guard !contentItems.isEmpty else {
-            currentContentIdentifier = nil
-            DispatchQueue.main.async {
-                self.nowPlaying = nil
-                self.nowPlayingSeriesName = nil
-                self.nowPlayingSeasonNumber = nil
-                self.nowPlayingEpisodeNumber = nil
-                self.nowPlayingEpisodeTitle = nil
-            }
+        guard currentPlaybackState != .stopped, !contentItems.isEmpty else {
+            clearDisplayedNowPlaying()
             return
         }
 
         let index = Int(queueLocation)
         let item = index < contentItems.count ? contentItems[index] : contentItems[0]
 
-        guard item.hasMetadata else { return }
+        guard item.hasMetadata else {
+            clearDisplayedNowPlaying()
+            return
+        }
 
         let meta = item.metadata
         // Textual metadata is optional in normal MRP playback updates. Infuse,
@@ -1329,19 +1345,20 @@ public final class MRPManager {
             item.hasArtworkData
         let hasContent = hasTextContent || hasPlaybackContent
 
-        guard hasContent else {
-            currentContentIdentifier = nil
-            DispatchQueue.main.async {
-                self.nowPlaying = nil
-                self.nowPlayingSeriesName = nil
-                self.nowPlayingSeasonNumber = nil
-                self.nowPlayingEpisodeNumber = nil
-                self.nowPlayingEpisodeTitle = nil
-            }
+        let itemID = item.hasIdentifier && !item.identifier.isEmpty ? item.identifier : nil
+        let wasPresented = itemID != nil && itemID == currentContentIdentifier
+        let hasProgress = meta.hasElapsedTime && meta.elapsedTime.isFinite && meta.elapsedTime > 0
+        let hasActiveRate = currentPlaybackState != .paused
+            && meta.hasPlaybackRate && meta.playbackRate.isFinite && meta.playbackRate > 0
+
+        // Browsing can publish a title and duration before a player starts.
+        // A real item remains visible when paused, including at the first frame.
+        guard hasContent, currentPlaybackState == .playing || currentPlaybackState == .seeking
+                || wasPresented || hasProgress || hasActiveRate else {
+            clearDisplayedNowPlaying()
             return
         }
 
-        let itemID = item.hasIdentifier ? item.identifier : nil
         let contentChanged = itemID != currentContentIdentifier
         currentContentIdentifier = itemID
 
@@ -1349,7 +1366,8 @@ public final class MRPManager {
             artworkUnavailable = false
         }
 
-        let playbackRate = meta.hasPlaybackRate ? meta.playbackRate : (self.nowPlaying?.playbackRate ?? 0)
+        let playbackRate = currentPlaybackState == .paused
+            ? 0 : (meta.hasPlaybackRate ? meta.playbackRate : (self.nowPlaying?.playbackRate ?? 0))
 
         // elapsedTimeTimestamp is in Cocoa epoch (Jan 1, 2001)
         let timestamp: Date

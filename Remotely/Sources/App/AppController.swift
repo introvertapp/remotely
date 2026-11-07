@@ -47,14 +47,20 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func applicationDidResignActive(_ notification: Notification) {
-        // Default behavior remains menu-bar transient. Always-on-top mode is
-        // explicitly persistent and therefore survives application deactivation.
-        guard panel != nil, !model.alwaysOnTop else { return }
-        if panel.isVisible {
-            panel.orderOut(nil)
-        }
-        panelPresented = false
-        updateRemotePresentationState()
+        guard panelPresented, !model.alwaysOnTop else { return }
+        // The status button can take focus before it sends its action. Let
+        // that press toggle the existing presentation state.
+        guard !isPressingStatusButton else { return }
+        hidePanel()
+    }
+
+    private var isPressingStatusButton: Bool {
+        guard NSEvent.pressedMouseButtons & 1 != 0,
+              !NSEvent.modifierFlags.contains(.command),
+              let button = statusItem?.button,
+              let window = button.window else { return false }
+        let mouseInWindow = window.convertPoint(fromScreen: NSEvent.mouseLocation)
+        return button.bounds.contains(button.convert(mouseInWindow, from: nil))
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -219,7 +225,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
         button.image = makeRemoteIcon()
         button.target = self
         button.action = #selector(statusItemClicked(_:))
-        button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        button.sendAction(on: [.leftMouseDown, .rightMouseUp])
 
         let menu = NSMenu(title: "remotely")
 
