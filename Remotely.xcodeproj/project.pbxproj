@@ -1,0 +1,208 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		931702CF0000000000000001 /* ItsytvCore in Frameworks */ = {isa = PBXBuildFile; productRef = 931702CF0000000000000017 /* ItsytvCore */; };
+		931702CF0000000000000002 /* AppIcon.icns in Resources */ = {isa = PBXBuildFile; fileRef = 931702CF0000000000000005 /* AppIcon.icns */; };
+		931702CF0000000000000003 /* ThirdParty in Resources */ = {isa = PBXBuildFile; fileRef = 931702CF0000000000000006 /* ThirdParty */; };
+		931702CF000000000000001A /* THIRD_PARTY_NOTICES.md in Resources */ = {isa = PBXBuildFile; fileRef = 931702CF000000000000001B /* THIRD_PARTY_NOTICES.md */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		931702CF0000000000000004 /* remotely.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; path = remotely.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		931702CF0000000000000005 /* AppIcon.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; path = AppIcon.icns; sourceTree = "<group>"; };
+		931702CF0000000000000006 /* ThirdParty */ = {isa = PBXFileReference; lastKnownFileType = folder; path = ThirdParty; sourceTree = "<group>"; };
+		931702CF0000000000000007 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		931702CF0000000000000008 /* Remotely.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Configuration/Remotely.xcconfig; sourceTree = "<group>"; };
+		931702CF000000000000001B /* THIRD_PARTY_NOTICES.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = THIRD_PARTY_NOTICES.md; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		931702CF0000000000000009 /* Sources */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Sources;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		931702CF000000000000000A /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (931702CF0000000000000001 /* ItsytvCore in Frameworks */,);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		931702CF000000000000000B = {
+			isa = PBXGroup;
+			children = (
+				931702CF000000000000000C /* Remotely */,
+				931702CF0000000000000008 /* Remotely.xcconfig */,
+				931702CF000000000000001B /* THIRD_PARTY_NOTICES.md */,
+				931702CF000000000000000E /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		931702CF000000000000000C /* Remotely */ = {
+			isa = PBXGroup;
+			children = (
+				931702CF0000000000000009 /* Sources */,
+				931702CF000000000000000D /* Resources */,
+				931702CF0000000000000007 /* Info.plist */,
+			);
+			path = Remotely;
+			sourceTree = "<group>";
+		};
+		931702CF000000000000000D /* Resources */ = {
+			isa = PBXGroup;
+			children = (931702CF0000000000000005 /* AppIcon.icns */, 931702CF0000000000000006 /* ThirdParty */,);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		931702CF000000000000000E /* Products */ = {
+			isa = PBXGroup;
+			children = (931702CF0000000000000004 /* remotely.app */,);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		931702CF000000000000000F /* Remotely */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 931702CF0000000000000018 /* Target configurations */;
+			buildPhases = (
+				931702CF0000000000000010 /* Sources */,
+				931702CF000000000000000A /* Frameworks */,
+				931702CF0000000000000011 /* Resources */,
+			);
+			buildRules = ();
+			dependencies = ();
+			fileSystemSynchronizedGroups = (931702CF0000000000000009 /* Sources */,);
+			name = Remotely;
+			packageProductDependencies = (931702CF0000000000000017 /* ItsytvCore */,);
+			productName = remotely;
+			productReference = 931702CF0000000000000004 /* remotely.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		931702CF0000000000000012 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastUpgradeCheck = 2720;
+			};
+			buildConfigurationList = 931702CF0000000000000019 /* Project configurations */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (en, Base,);
+			mainGroup = 931702CF000000000000000B;
+			packageReferences = (931702CF0000000000000016 /* AppleTVProtocol */,);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 931702CF000000000000000E /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (931702CF000000000000000F /* Remotely */,);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		931702CF0000000000000011 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				931702CF0000000000000002 /* AppIcon.icns in Resources */,
+				931702CF0000000000000003 /* ThirdParty in Resources */,
+				931702CF000000000000001A /* THIRD_PARTY_NOTICES.md in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		931702CF0000000000000010 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = ();
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		931702CF0000000000000013 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		931702CF0000000000000014 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+			};
+			name = Release;
+		};
+		931702CF0000000000000015 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 931702CF0000000000000008 /* Remotely.xcconfig */;
+			buildSettings = {};
+			name = Debug;
+		};
+		931702CF000000000000001C /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 931702CF0000000000000008 /* Remotely.xcconfig */;
+			buildSettings = {};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		931702CF0000000000000018 /* Target configurations */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (931702CF0000000000000015 /* Debug */, 931702CF000000000000001C /* Release */,);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		931702CF0000000000000019 /* Project configurations */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (931702CF0000000000000013 /* Debug */, 931702CF0000000000000014 /* Release */,);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		931702CF0000000000000016 /* AppleTVProtocol */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/AppleTVProtocol;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		931702CF0000000000000017 /* ItsytvCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 931702CF0000000000000016 /* AppleTVProtocol */;
+			productName = ItsytvCore;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 931702CF0000000000000012 /* Project object */;
+}

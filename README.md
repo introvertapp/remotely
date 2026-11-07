@@ -1,69 +1,58 @@
 <p align="center">
-  <img alt="logo" src="docs/images/logo.png" width="640"/></br>
-  A native macOS menu-bar remote for Apple TV, with Now Playing controls, app launching, keyboard input, and a compact MiniRemote.
+  <img src="docs/images/logo.png" alt="Remotely" width="640">
 </p>
 
 <p align="center">
-  <img
-    alt="Version"
-    src="https://img.shields.io/badge/dynamic/xml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fintrovertapp%2Fremotely%2Fmain%2FResources%2FInfo.plist&query=%2F%2Fkey%5B.%3D%22CFBundleShortVersionString%22%5D%2Ffollowing-sibling%3A%3Astring%5B1%5D&prefix=v&label=version"
-  >
-</p>
-
-<p align="center">
-  <img src="docs/images/remote.png" alt="remote" width="225"/>
-  <img src="docs/images/search.png" alt="remote search" width="225"/>
-  <img src="docs/images/apps.png" alt="apps launcher" width="225"/>
-  <img src="docs/images/preferences.png" alt="preferences" width="225"/>
-</p>
-
-<p align="center">
-  <img src="docs/images/mini-remote.png" alt="MiniRemote" width="560"/>
+  Control your Apple TV from your Mac’s menu bar.
 </p>
 
 ## Features
 
-- Full Apple TV remote with clickpad, navigation, playback, volume, and power controls
-- Now Playing artwork and normalized local metadata (show/season/episode, episode title, or creator/channel), with explicit MRP session switching, same-item metadata retention through Apple TV pre-roll, and a teardown-only visible-UI stale-session check that cannot replace healthy playback state, plus seekable timeline and always-available basic playback controls including ±10 second skipping
-- MiniRemote for a compact always-available control surface
-- Optional **Auto-skip tv ads and pre-roll sequences** using Apple TV’s published main-content boundary
-- Launch installed Apple TV apps directly from macOS
-- Keyboard Search when Apple TV requests text input
-- Discover, pair, and switch between multiple Apple TVs
-- Optional always-on-top mode, launch at login, and remembered window position
+- Control navigation, playback, volume, and power with the remote or compact MiniRemote.
+- See Now Playing artwork and playback details, seek on the timeline, and skip 10 seconds forward or back.
+- Open installed Apple TV apps from your Mac and type with your Mac keyboard when Apple TV asks for text.
+- Optionally skip supported ads and pre-roll in the Apple TV app.
+- Keep the remote on top, remember its position, or launch Remotely at login.
 
-## Requirements
+<p align="center">
+  <img src="docs/images/remote.png" alt="Remote with Now Playing and playback controls" width="190">
+  <img src="docs/images/search.png" alt="Keyboard input for Apple TV search" width="190">
+  <img src="docs/images/apps.png" alt="Apple TV app launcher" width="190">
+  <img src="docs/images/preferences.png" alt="Preferences and Apple TV pairing" width="190">
+</p>
 
-- macOS 14 Sonoma or later
-- Xcode or the Xcode Command Line Tools with Swift available
-- An Apple TV on the same local network
-- Internet access during the first build to fetch pinned source dependencies
+<p align="center">
+  <img src="docs/images/mini-remote.png" alt="MiniRemote with compact playback controls" width="560">
+</p>
 
-## Build
+## Install Remotely
 
-From the project directory, run:
+You’ll need macOS 14 Sonoma or later and an Apple TV on the same local network as your Mac.
 
-```zsh
-./scripts/build.sh
-```
+1. Open [GitHub Releases](https://github.com/introvertapp/remotely/releases) and download the ZIP for your Mac from the release’s **Assets**.
 
-The build script validates the source, fetches the pinned dependencies, builds and signs `remotely.app`, installs it in `/Applications`, and launches it.
+   | Mac | ZIP filename |
+   | --- | --- |
+   | Apple Silicon | `remotely-<version>-macos-arm64.zip` |
+   | Intel | `remotely-<version>-macos-x86_64.zip` |
 
-On the first build, macOS may ask for permission to create/trust the local code-signing identity or to install the app.
+   Check **Apple menu → About This Mac** if you’re unsure which Mac you have.
 
-### Other scripts
+2. Open the ZIP and move `remotely.app` into **Applications**.
+3. Open Remotely from **Applications**. If macOS blocks the first launch, go to **System Settings → Privacy & Security**, choose **Open Anyway** for Remotely, and confirm. [Apple’s first-launch instructions](https://support.apple.com/102445)
+4. Allow local network access if macOS asks. Remotely appears in the menu bar.
 
-All maintenance scripts live in `scripts/`:
+## Pair your Apple TV
 
-```text
-scripts/validate_source.sh  Validate source/build invariants
-scripts/clean.sh            Remove local build output
-scripts/install.sh          Install an already-built app
-scripts/setup_signing.sh    Prepare the persistent local signing identity
-```
+1. Right-click the Remotely menu bar icon and choose **Preferences…**.
+2. Select your Apple TV. If it’s missing from the list, click **Scan**.
+3. Click **Pair…** and enter the four-digit code shown on your TV.
+4. Click the menu bar icon to open the remote.
 
-## Notes
+Remotely stores pairing credentials in your Mac’s Keychain so it can reconnect after you quit and reopen the app. To switch to another paired Apple TV, select it in **Preferences** and click **Connect**.
 
-remotely communicates directly with Apple TV over the local network. Pairing credentials are stored in the macOS Keychain.
+## Update Remotely
 
-Third-party components and notices are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Quit Remotely from its menu bar menu, download the newer ZIP for your Mac, and replace `remotely.app` in **Applications**. If a saved pairing stops working, select the device in **Preferences**, click **Remove Paired Device**, and pair it again.
+
+[Third-party notices](THIRD_PARTY_NOTICES.md)
